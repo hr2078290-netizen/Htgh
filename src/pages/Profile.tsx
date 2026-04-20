@@ -56,18 +56,22 @@ export default function Profile() {
   if (!profile) return null;
 
   return (
-    <div className="max-w-4xl mx-auto py-10 px-4">
-      <div className="bg-[#1b1c1d] border border-white/10 rounded-[1rem] overflow-hidden shadow-2xl">
+    <div className="max-w-7xl mx-auto py-10 px-4">
+      <div className="bg-[#1b1c1d] border border-white/10 rounded-[1rem] overflow-hidden shadow-2xl relative">
+        <Link 
+          to="/play" 
+          className="absolute top-4 left-4 z-20 bg-black/40 hover:bg-black/60 backdrop-blur-md border border-white/10 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-widest text-white/70 hover:text-white transition-all flex items-center gap-2"
+        >
+          <ArrowDownLeft className="w-4 h-4 rotate-45" /> Back to Game
+        </Link>
         {/* Header/Cover */}
         <div className="h-24 bg-gradient-to-r from-[#F27D26] to-[#e91e63] opacity-30 relative">
-           <div className="absolute inset-0 bg-[url('https://picsum.photos/seed/aviator/1200/400')] bg-cover bg-center mix-blend-overlay" />
-           <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#1b1c1d]" />
         </div>
 
-        <div className="px-3 sm:px-8 pb-6 -mt-12 relative z-10">
+        <div className="px-3 sm:px-8 pb-6 -mt-8 relative z-10">
           <div className="flex flex-col md:flex-row items-center md:items-end gap-3 mb-6 text-center md:text-left">
-            <div className="w-24 h-24 rounded-[1.5rem] bg-[#0a0604] border-[4px] border-[#1b1c1d] overflow-hidden flex items-center justify-center shadow-xl">
-               <Plane className="w-12 h-12 text-[#F27D26] transform -rotate-45 drop-shadow-[0_0_15px_rgba(242,125,38,0.5)]" />
+            <div className="w-16 h-16 rounded-[1.2rem] bg-[#0a0604] border-[4px] border-[#1b1c1d] overflow-hidden flex items-center justify-center shadow-xl">
+               <Plane className="w-8 h-8 text-[#F27D26] transform -rotate-45 drop-shadow-[0_0_15px_rgba(242,125,38,0.5)]" />
             </div>
             <div className="flex-1 pb-1">
                <h1 className="text-2xl font-black tracking-tighter uppercase italic text-white leading-tight">{profile.email.split('@')[0]}</h1>

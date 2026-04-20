@@ -38,7 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const newProfile: UserProfile = {
               uid: u.uid,
               email: u.email || '',
-              balance: 0,
+              balance: 50000, // Give starter balance for testing
               referralBalance: 0,
               isAdmin: u.email === 'hr2078290@gmail.com', // Auto-grant admin for user request
               status: 'active',

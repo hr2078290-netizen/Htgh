@@ -33,49 +33,37 @@ export default function AdminPanel() {
     }
   };
 
+  // Sync game state from SSE Stream (Solves Quota Error)
   useEffect(() => {
-    let interval: any;
-    if (settings.gameState === 'flying' && settings.startTime) {
-      interval = setInterval(() => {
-        const start = settings.startTime?.toMillis ? settings.startTime.toMillis() : (settings.startTime?.seconds ? settings.startTime.seconds * 1000 : null);
-        if (start) {
-          const elapsed = (Date.now() - start) / 1000;
-          if (elapsed > 0) {
-            const mult = Math.exp(0.15 * elapsed);
-            setCurrentMultiplier(mult);
-          }
-        }
-      }, 50);
-    } else {
-      setCurrentMultiplier(1.0);
-    }
-    return () => clearInterval(interval);
-  }, [settings.gameState, settings.startTime]);
+    const eventSource = new EventSource('/api/game/stream');
 
-  useEffect(() => {
-    if (localStorage.getItem('adminAuth') === 'true') {
-      setIsAdminLoggedIn(true);
-    }
-  }, []);
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (!data) return;
 
-  useEffect(() => {
-    // Settings sync
-    const unsubSettings = onSnapshot(doc(db, 'settings', 'config'), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as GameSettings & { currentRound?: number };
-        setSettings(data);
-        setRoundNumber(data.currentRound || 1);
-        // Only update local if not focused or if manual mode changed
-        if (data.nextCrashValue !== undefined) {
-           setLocalNextValue(prev => {
-             // If local is currently empty or user is not typing, sync it
-             return prev === '' ? String(data.nextCrashValue) : prev;
-           });
-        }
+      setSettings(prev => ({
+        ...prev,
+        gameState: data.status,
+        startTime: data.startTime,
+        nextTransitionTime: data.nextTransitionTime,
+        countdownEndTime: data.countdownEndTime,
+        lastFinalValue: data.lastFinalValue,
+        nextCrashValue: data.nextCrashValue,
+        isManualMode: data.isManualMode,
+        manualOverrideNextValue: data.manualOverrideNextValue
+      }));
+      
+      setRoundNumber(data.currentRound);
+      setCurrentMultiplier(data.multiplier);
+      setActiveBets(data.activeBets || []);
+      setHistory(data.history || []);
+      
+      // Update local if empty (sync)
+      if (data.nextCrashValue !== undefined) {
+        setLocalNextValue(prev => (prev === '' ? String(data.nextCrashValue) : prev));
       }
-    });
+    };
 
-    // Subscriptions
     const unsubDeposits = onSnapshot(query(collection(db, 'deposits'), orderBy('timestamp', 'desc')), (snap) => {
       const d: DepositRequest[] = [];
       snap.forEach(docSnap => d.push({ id: docSnap.id, ...docSnap.data() } as DepositRequest));
@@ -94,34 +82,27 @@ export default function AdminPanel() {
       setAllUsers(u);
     });
 
-    const unsubActiveBets = onSnapshot(collection(db, 'active_bets'), (snap) => {
-      const b: any[] = [];
-      snap.forEach(d => b.push({ id: d.id, ...d.data() }));
-      setActiveBets(b);
-    });
-
-    const unsubHistory = onSnapshot(query(collection(db, 'history'), orderBy('timestamp', 'desc'), limit(15)), (snap) => {
-      const h: GameHistoryEntry[] = [];
-      snap.forEach(d => h.push(d.data() as GameHistoryEntry));
-      setHistory(h);
-    });
-
     return () => {
-      unsubSettings();
+      eventSource.close();
       unsubDeposits();
       unsubWithdrawals();
       unsubUsers();
-      unsubActiveBets();
-      unsubHistory();
     };
   }, []);
 
   const updateSettings = async (field: string, value: any) => {
     try {
-      await updateDoc(doc(db, 'settings', 'config'), { [field]: value });
+      // 1. Update In-Memory via API (Fast & Quota-Free)
+      await fetch('/api/admin/game-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, value })
+      });
+
+      // 2. Also persist to Firestore for reboot persistence (Slow & Quota-Heavy, but rare)
+      await updateDoc(doc(db, 'settings', 'config'), { [field]: value }).catch(() => {});
     } catch (e) {
-      // If doc doesn't exist, create it
-      await setDoc(doc(db, 'settings', 'config'), { ...settings, [field]: value });
+      console.error("Config update error:", e);
     }
   };
 

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
-import Home from "./pages/Home";
+import GamePage from "./pages/GamePage";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Profile from "./pages/Profile";
@@ -10,6 +11,7 @@ import Withdrawal from "./pages/Withdrawal";
 import TransactionHistory from "./pages/TransactionHistory";
 import AdminPanel from "./pages/AdminPanel";
 import Navbar from "./components/Navbar";
+import MobileNav from "./components/MobileNav";
 
 function ProtectedRoute({ children, adminOnly = false }: { children: React.ReactNode, adminOnly?: boolean }) {
   const { user, profile, loading } = useAuth();
@@ -25,20 +27,21 @@ function ProtectedRoute({ children, adminOnly = false }: { children: React.React
 export default function App() {
   return (
     <AuthProvider>
-      <div className="min-h-screen bg-[#050505] text-[#E4E3E0] font-sans selection:bg-[#F27D26] selection:text-white">
-        <Navbar />
-        <main className="w-full max-w-7xl mx-auto px-0 sm:px-4 py-4 sm:py-8">
+      <div className="min-h-screen bg-[#050505] text-[#E4E3E0] font-sans selection:bg-[#F27D26] selection:text-white pb-20 sm:pb-0">
+        <main className="w-full max-w-7xl mx-auto px-0 sm:px-4 py-0 sm:py-8">
           <Routes>
-            <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+            <Route path="/" element={<Landing />} />
+            <Route path="/play" element={<ProtectedRoute><GamePage /></ProtectedRoute>} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
             <Route path="/deposit" element={<ProtectedRoute><Deposit /></ProtectedRoute>} />
             <Route path="/withdrawal" element={<ProtectedRoute><Withdrawal /></ProtectedRoute>} />
             <Route path="/transactions" element={<ProtectedRoute><TransactionHistory /></ProtectedRoute>} />
-            <Route path="/admin" element={<AdminPanel />} />
+            <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />
           </Routes>
         </main>
+        <MobileNav />
       </div>
     </AuthProvider>
   );

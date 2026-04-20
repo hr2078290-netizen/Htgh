@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeApp as initializeClientApp } from "firebase/app";
-import { getFirestore as getFirestoreClient, doc as docClient, onSnapshot as onSnapshotClient, updateDoc as updateDocClient, increment as incrementClient, serverTimestamp as serverTimestampClient, getDoc as getDocClient, setDoc as setDocClient, Timestamp as TimestampClient, collection as collectionClient, getDocs as getDocsClient, deleteField } from "firebase/firestore";
+import { getFirestore as getFirestoreClient, doc as docClient, onSnapshot as onSnapshotClient, updateDoc as updateDocClient, increment as incrementClient, serverTimestamp as serverTimestampClient, getDoc as getDocClient, setDoc as setDocClient, Timestamp as TimestampClient, collection as collectionClient, getDocs as getDocsClient, deleteField, query as queryClient, orderBy as orderByClient, limit as limitClient } from "firebase/firestore";
 import { getAuth as getAuthClient, signInAnonymously } from "firebase/auth";
 import { initializeApp as initializeAdminApp, getApps as getAdminApps, getApp as getAdminApp } from 'firebase-admin/app';
 import { getFirestore as getFirestoreAdmin, FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -70,177 +70,321 @@ async function startServer() {
 
   let settingsRef: any = null;
 
+  // Initial Auth & Registration
   try {
-    // Background Game Loop for 24/7 Running using Client SDK
-    // (Bypasses the "7 PERMISSION_DENIED" seen with Admin SDK in this environment)
-    let lastStateChange = Date.now();
-    let lastProcessedRound = 0;
-
-    // Sign in the server's client SDK anonymously for rule compliance (if needed)
-    try {
-      await signInAnonymously(authClient);
-      console.log("[SERVER] Signed in anonymously to Firestore Client.");
-    } catch (e) {
-      console.error("[SERVER] Anonymous sign-in failed:", e);
-    }
-
-    console.log("Setting up Firestore Client listener for game config...");
-    onSnapshotClient(docClient(dbClient, 'settings', 'config'), (snap) => {
-      if (snap.exists()) {
-        const newData = snap.data();
-        if (newData && newData.gameState !== settingsRef?.gameState) {
-          console.log(`[SERVER] State Change: ${settingsRef?.gameState || 'INIT'} -> ${newData.gameState}`);
-          lastStateChange = Date.now();
-        }
-        settingsRef = newData;
-      } else {
-        console.log("[SERVER] Config document missing. Initializing...");
-        setDocClient(docClient(dbClient, 'settings', 'config'), {
-          gameState: 'waiting',
-          nextCrashValue: 1.5,
-          currentRound: 1,
-          countdownEndTime: TimestampClient.fromDate(new Date(Date.now() + 5000))
-        });
-      }
-    }, (error) => {
-      console.error("[SERVER] Client Firestore Snapshot Error:", error);
+    const userCred = await signInAnonymously(authClient);
+    const serverUid = userCred.user.uid;
+    console.log(`[SERVER] Signed in anonymously. UID: ${serverUid}`);
+    
+    // Register this UID in settings/config so rules can trust it
+    await updateDocClient(docClient(dbClient, 'settings', 'config'), { 
+      serverUid: serverUid 
     });
-
-    const handleCrash = async (roundNum: number, finalValue: number) => {
-      if (lastProcessedRound === roundNum) return;
-      lastProcessedRound = roundNum;
-
-      try {
-        console.log(`[SERVER] Round ${roundNum} CRASHED at ${finalValue}x. Processing...`);
-        const configRef = docClient(dbClient, 'settings', 'config');
-        const roundId = `round_${roundNum}`;
-        
-        await setDocClient(docClient(dbClient, 'history', roundId), {
-          value: finalValue,
-          timestamp: serverTimestampClient(),
-          round: roundNum
-        });
-
-        let nextValue = settingsRef?.nextCrashValue || 1.10;
-        
-        if (settingsRef?.manualOverrideNextValue) {
-          nextValue = parseFloat(settingsRef.manualOverrideNextValue);
-          console.log(`[SERVER] MANUAL OVERRIDE: ${nextValue}x`);
-          await updateDocClient(configRef, { manualOverrideNextValue: deleteField() });
-        } else if (!settingsRef?.isManualMode) {
-          const rand = Math.random() * 100;
-          if (rand < 70) nextValue = parseFloat((1.01 + Math.random() * 3.99).toFixed(2));
-          else if (rand < 90) nextValue = parseFloat((5.01 + Math.random() * 14.99).toFixed(2));
-          else if (rand < 97) nextValue = parseFloat((20.01 + Math.random() * 79.99).toFixed(2));
-          else if (rand < 99) nextValue = parseFloat((100.01 + Math.random() * 399.99).toFixed(2));
-          else nextValue = parseFloat((500.01 + Math.random() * 499.99).toFixed(2));
-        }
-
-        const transitionSeconds = 3;
-        const nextTransitionTime = TimestampClient.fromDate(new Date(Date.now() + transitionSeconds * 1000));
-
-        await updateDocClient(configRef, { 
-          gameState: 'crashed',
-          nextTransitionTime: nextTransitionTime,
-          lastFinalValue: finalValue,
-          pendingNextValue: nextValue,
-          nextCrashValue: nextValue 
-        });
-        
-        console.log(`[SERVER] Round ${roundNum} transition to CRASHED updated via Client SDK.`);
-        
-      } catch (e) {
-        console.error("[SERVER] Crash Handling Failure:", e);
-      }
-    };
-
-    const getMillis = (ts: any) => {
-      if (!ts) return null;
-      if (typeof ts.toMillis === 'function') return ts.toMillis();
-      if (typeof ts === 'number') return ts;
-      if (ts instanceof Date) return ts.getTime();
-      if (ts.seconds) return ts.seconds * 1000;
-      return new Date(ts).getTime();
-    };
-
-    setInterval(async () => {
-      try {
-        const now = Date.now();
-        
-        if (!settingsRef) {
-          // Attempt recovery if listener hasn't provided data yet
-          const snap = await getDocClient(docClient(dbClient, 'settings', 'config'));
-          if (snap.exists()) settingsRef = snap.data();
-          return;
-        }
-
-        const { gameState, startTime, countdownEndTime, nextCrashValue, currentRound = 1, nextTransitionTime } = settingsRef;
-
-        // Watchdog: If stuck in flying or waiting for 10 mins, reset
-        const timeSinceChange = now - lastStateChange;
-        if (timeSinceChange > 600000) { 
-          console.warn(`[SERVER] Stuck in ${gameState} for ${Math.round(timeSinceChange/1000)}s! Resetting...`);
-          await updateDocClient(docClient(dbClient, 'settings', 'config'), {
-            gameState: 'waiting',
-            countdownEndTime: TimestampClient.fromDate(new Date(now + 5000)),
-            startTime: null,
-            nextTransitionTime: null
-          }).catch(() => {});
-          lastStateChange = now;
-          return;
-        }
-
-        // State Machine
-        if (gameState === 'crashed' && nextTransitionTime) {
-          const transTime = getMillis(nextTransitionTime);
-          if (transTime && now >= transTime) {
-            console.log("[SERVER] CRASHED -> WAITING");
-            await updateDocClient(docClient(dbClient, 'settings', 'config'), {
-              gameState: 'waiting',
-              currentRound: incrementClient(1),
-              countdownEndTime: TimestampClient.fromDate(new Date(now + 10000)),
-              startTime: null,
-              nextTransitionTime: null
-            });
-          }
-        }
-
-        if (gameState === 'waiting' && countdownEndTime) {
-          const endTime = getMillis(countdownEndTime);
-          if (endTime && now >= endTime) {
-            console.log("[SERVER] WAITING -> FLYING");
-            await updateDocClient(docClient(dbClient, 'settings', 'config'), {
-              gameState: 'flying',
-              startTime: serverTimestampClient(),
-              countdownEndTime: null
-            });
-          }
-        }
-
-        if (gameState === 'flying' && startTime) {
-          const start = getMillis(startTime);
-          if (start && !isNaN(start)) {
-            const elapsed = (now - start) / 1000;
-            if (elapsed > 0) {
-              const currentMultiplier = Math.exp(0.15 * elapsed);
-              const crashThreshold = parseFloat(String(nextCrashValue || 2.0));
-
-              if (!isNaN(currentMultiplier) && currentMultiplier >= crashThreshold) {
-                await handleCrash(currentRound, crashThreshold);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error("[SERVER] Game Loop Loop Error:", error);
-      }
-    }, 1000);
-
-  } catch (error) {
-    console.error("Admin initialization error:", error);
+    console.log("[SERVER] Registered UID in settings/config for rule bypass.");
+  } catch (e) {
+    console.error("[SERVER] Auth/Registration failed:", e);
   }
 
   app.use(express.json());
+
+  // --- SERVER AUTHORITATIVE GAME STATE (IN-MEMORY) ---
+  // This solves the Firestore "RESOURCE_EXHAUSTED" error by not writing state every round.
+  const gameStateMemory = {
+    status: 'waiting' as 'waiting' | 'flying' | 'crashed',
+    currentRound: 1,
+    multiplier: 1.0,
+    startTime: 0,
+    countdownEndTime: 0,
+    nextTransitionTime: 0,
+    lastFinalValue: 0,
+    nextCrashValue: 1.5,
+    isManualMode: false,
+    manualOverrideNextValue: null as number | null,
+    history: [] as any[],
+    activeBets: [] as any[]
+  };
+
+  // SSE Clients
+  let clients: any[] = [];
+
+  const broadcastState = () => {
+    const data = JSON.stringify({
+      ...gameStateMemory,
+      serverTime: Date.now()
+    });
+    clients.forEach(client => client.res.write(`data: ${data}\n\n`));
+  };
+
+  // Load initial state from Firebase once on boot
+  const initFromFirestore = async () => {
+    try {
+      const configRef = docClient(dbClient, 'settings', 'config');
+      const snap = await getDocClient(configRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
+        gameStateMemory.currentRound = data.currentRound || 1;
+        gameStateMemory.isManualMode = !!data.isManualMode;
+      }
+      // Load history
+      const histSnap = await getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(10)));
+      gameStateMemory.history = histSnap.docs.map(d => d.data());
+    } catch (e) { console.error("Init Error:", e); }
+  };
+  initFromFirestore();
+
+  // SSE Endpoint
+  app.get("/api/game/stream", (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const clientId = Date.now();
+    const newClient = { id: clientId, res };
+    clients.push(newClient);
+
+    req.on('close', () => {
+      clients = clients.filter(c => c.id !== clientId);
+    });
+
+    // Send initial payload
+    res.write(`data: ${JSON.stringify(gameStateMemory)}\n\n`);
+  });
+
+  // Game Loop (In-Memory)
+  setInterval(() => {
+    const now = Date.now();
+
+    if (gameStateMemory.status === 'crashed') {
+      if (now >= gameStateMemory.nextTransitionTime) {
+        gameStateMemory.status = 'waiting';
+        gameStateMemory.multiplier = 1.0;
+        gameStateMemory.currentRound++;
+        gameStateMemory.countdownEndTime = now + 6000; // Shorter waiting time (6s) like real Aviator
+        gameStateMemory.activeBets = [];
+        broadcastState();
+      }
+    } else if (gameStateMemory.status === 'waiting') {
+      if (now >= gameStateMemory.countdownEndTime) {
+        gameStateMemory.status = 'flying';
+        gameStateMemory.startTime = now;
+        broadcastState();
+      }
+    } else if (gameStateMemory.status === 'flying') {
+      const elapsed = (now - gameStateMemory.startTime) / 1000;
+      gameStateMemory.multiplier = Math.exp(0.15 * elapsed);
+
+      if (gameStateMemory.multiplier >= gameStateMemory.nextCrashValue) {
+        // CRASH!
+        gameStateMemory.status = 'crashed';
+        gameStateMemory.lastFinalValue = gameStateMemory.nextCrashValue;
+        gameStateMemory.nextTransitionTime = now + 3000;
+        
+        // Add to history (limit 15)
+        const histItem = { value: gameStateMemory.lastFinalValue, timestamp: TimestampClient.now(), round: gameStateMemory.currentRound };
+        gameStateMemory.history = [histItem, ...gameStateMemory.history].slice(0, 15);
+
+        // PERSIST CRASH TO FIRESTORE (Only once per round to save quota)
+        const roundId = `round_${gameStateMemory.currentRound}`;
+        setDocClient(docClient(dbClient, 'history', roundId), {
+          ...histItem, 
+          timestamp: serverTimestampClient()
+        }).catch(e => console.error("History Save Error:", e));
+        
+        // Calculate next crash value
+        let nextValue = 1.10;
+        if (gameStateMemory.manualOverrideNextValue) {
+          nextValue = gameStateMemory.manualOverrideNextValue;
+          gameStateMemory.manualOverrideNextValue = null;
+        } else if (!gameStateMemory.isManualMode) {
+          const rand = Math.random() * 100;
+          // More complex Aviator-style distribution
+          if (rand < 10) nextValue = parseFloat((1.01 + Math.random() * 0.10).toFixed(2)); // Instant crash 10%
+          else if (rand < 50) nextValue = parseFloat((1.11 + Math.random() * 0.89).toFixed(2)); // Mid-range 40%
+          else if (rand < 75) nextValue = parseFloat((2.01 + Math.random() * 2.99).toFixed(2)); // Up to 5x 25%
+          else if (rand < 90) nextValue = parseFloat((5.01 + Math.random() * 9.99).toFixed(2)); // Up to 15x 15%
+          else if (rand < 98) nextValue = parseFloat((15.01 + Math.random() * 34.99).toFixed(2)); // Up to 50x 8%
+          else nextValue = parseFloat((50.01 + Math.random() * 499.99).toFixed(2)); // High-flyer 2%
+        }
+        gameStateMemory.nextCrashValue = nextValue;
+
+        // Persist round sync and upcoming crash value (Important for reboot stability)
+        updateDocClient(docClient(dbClient, 'settings', 'config'), { 
+          currentRound: gameStateMemory.currentRound,
+          lastFinalValue: gameStateMemory.lastFinalValue,
+          nextCrashValue: gameStateMemory.nextCrashValue
+        }).catch(() => {});
+
+        // Broadcast the transition
+        broadcastState();
+      }
+    }
+  }, 100);
+
+  // Broadcaster for real-time multiplier feel (higher frequency for flying)
+  setInterval(() => {
+    if (gameStateMemory.status === 'flying') {
+      broadcastState();
+    }
+  }, 200);
+
+  // --- BALANCE LEDGER (In-Memory to save Firestore Quota) ---
+  const userLedger: Map<string, { balance: number, referralBalance: number, dirty: boolean }> = new Map();
+
+  const getLedgerUser = async (userId: string) => {
+    if (userLedger.has(userId)) return userLedger.get(userId)!;
+    
+    // Fetch from Firestore if not in ledger
+    const userRef = docClient(dbClient, 'users', userId);
+    const snap = await getDocClient(userRef);
+    if (!snap.exists()) throw new Error("User record not found");
+    
+    const data = snap.data();
+    const entry = { balance: data.balance || 0, referralBalance: data.referralBalance || 0, dirty: false };
+    userLedger.set(userId, entry);
+    return entry;
+  };
+
+  // Sync Ledger to Firestore every 30 seconds
+  setInterval(async () => {
+    const dirtyUsers = Array.from(userLedger.entries()).filter(([_, data]) => data.dirty);
+    if (dirtyUsers.length === 0) return;
+
+    console.log(`[LEDGER] Flushing ${dirtyUsers.length} dirty user balances to Firestore...`);
+    for (const [userId, data] of dirtyUsers) {
+      try {
+        const userRef = docClient(dbClient, 'users', userId);
+        await updateDocClient(userRef, { 
+          balance: data.balance,
+          referralBalance: data.referralBalance
+        });
+        data.dirty = false;
+      } catch (e: any) {
+        console.error(`[LEDGER] Failed to sync user ${userId}:`, e.message || e);
+      }
+    }
+  }, 30000);
+
+  // Betting API (Uses Ledger to save writes)
+  app.post("/api/game/bet", async (req, res) => {
+    const { userId, email, amount, panel } = req.body;
+    if (gameStateMemory.status !== 'waiting') return res.status(400).json({ error: "Round already started" });
+    
+    try {
+      const user = await getLedgerUser(userId);
+      const totalAvailable = user.balance + user.referralBalance;
+
+      if (totalAvailable < amount) return res.status(400).json({ error: "Insufficient balance" });
+
+      // Deduct from memory ledger
+      let remainingToDeduct = amount;
+      if (user.referralBalance >= remainingToDeduct) {
+        user.referralBalance -= remainingToDeduct;
+        remainingToDeduct = 0;
+      } else {
+        remainingToDeduct -= user.referralBalance;
+        user.referralBalance = 0;
+        user.balance -= remainingToDeduct;
+      }
+
+      user.dirty = true;
+
+      // Add to In-Memory active bets (Saves Quota)
+      gameStateMemory.activeBets.push({ id: `${userId}_${panel}`, userId, email, amount, panel, status: 'pending' });
+      broadcastState();
+      
+      res.json({ 
+        success: true, 
+        newBalance: user.balance, 
+        newReferralBalance: user.referralBalance 
+      });
+    } catch (e: any) { 
+      console.error("[SERVER] Betting error:", e.message || e);
+      res.status(500).json({ error: "Betting error: " + (e.message || "Unknown") }); 
+    }
+  });
+
+  app.post("/api/game/cashout", async (req, res) => {
+    const { userId, panel, multiplier } = req.body;
+    if (gameStateMemory.status !== 'flying') {
+      return res.status(400).json({ error: "Game is not in flying state" });
+    }
+    
+    const betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
+    if (betIndex === -1) {
+      return res.status(400).json({ error: "No active bet found for this panel" });
+    }
+
+    const bet = gameStateMemory.activeBets[betIndex];
+    if (multiplier > gameStateMemory.multiplier + 0.1) {
+      return res.status(400).json({ error: "Invalid multiplier / Timing error" });
+    }
+
+    try {
+      const winAmount = parseFloat((bet.amount * multiplier).toFixed(2));
+      bet.status = 'cashed_out';
+      bet.cashoutValue = multiplier;
+      bet.winAmount = winAmount;
+
+      // Update Ledger
+      const user = await getLedgerUser(userId);
+      user.balance += winAmount;
+      user.dirty = true;
+      
+      broadcastState();
+      res.json({ 
+        success: true, 
+        winAmount,
+        newBalance: user.balance,
+        newReferralBalance: user.referralBalance
+      });
+    } catch (e: any) { 
+      console.error("[SERVER] Cashout error:", e.message || e);
+      res.status(500).json({ error: "Cashout failed: " + (e.message || "Unknown") }); 
+    }
+  });
+
+  app.post("/api/game/cancel", async (req, res) => {
+    const { userId, panel } = req.body;
+    if (gameStateMemory.status !== 'waiting') {
+      return res.status(400).json({ error: "Round already started, cannot cancel" });
+    }
+
+    const betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
+    if (betIndex === -1) {
+      return res.status(400).json({ error: "No pending bet to cancel" });
+    }
+
+    const bet = gameStateMemory.activeBets[betIndex];
+    try {
+      // Refund via Ledger
+      const user = await getLedgerUser(userId);
+      user.balance += bet.amount;
+      user.dirty = true;
+
+      // Remove from in-memory bets
+      gameStateMemory.activeBets.splice(betIndex, 1);
+      
+      broadcastState();
+      res.json({ 
+        success: true,
+        newBalance: user.balance,
+        newReferralBalance: user.referralBalance
+      });
+    } catch (e: any) {
+      console.error("[SERVER] Cancel error:", e.message || e);
+      res.status(500).json({ error: "Cancellation failed: " + (e.message || "Unknown") });
+    }
+  });
+
+  // Admin Config API
+  app.post("/api/admin/game-config", async (req, res) => {
+    const { field, value } = req.body;
+    (gameStateMemory as any)[field] = value;
+    broadcastState();
+    res.json({ success: true });
+  });
 
   // API routes
   app.get("/api/health", (req, res) => {

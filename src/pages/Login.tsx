@@ -18,7 +18,7 @@ export default function Login() {
     setError('');
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigate('/');
+      navigate('/play');
     } catch (err: any) {
       setError(err.message || 'Failed to login');
     } finally {
