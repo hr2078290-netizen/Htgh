@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { db, auth } from '../lib/firebase';
 import { doc, onSnapshot, updateDoc, increment, addDoc, collection, query, orderBy, limit, serverTimestamp, getDocs, deleteDoc, where, setDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plane, History, TrendingUp, AlertCircle, TrendingDown, Volume2, VolumeX, Plus, Minus, Repeat, Zap, Menu, Music, Settings, ShieldCheck, BookOpen, FileText, HelpCircle, User, X, LogOut, Wallet } from 'lucide-react';
+import { Plane, History, TrendingUp, AlertCircle, TrendingDown, Volume2, VolumeX, Plus, Minus, Repeat, Zap, Menu, Music, Settings, ShieldCheck, ShieldAlert, BookOpen, FileText, HelpCircle, User, X, LogOut, Wallet, Users } from 'lucide-react';
 import { GameSettings, GameHistoryEntry } from '../types';
 import { useAuth } from '../lib/AuthContext';
 
@@ -141,7 +141,34 @@ export default function Home() {
       }
 
       setHistory(data.history || []);
-      setActiveBets(data.activeBets || []);
+      const newActiveBets = data.activeBets || [];
+      const newQueuedBets = data.queuedBets || [];
+      setActiveBets(newActiveBets);
+      
+      // Auto-sync local panel states with server truth
+      if (profile) {
+        const myActive = newActiveBets.filter((b: any) => b.userId === profile.uid);
+        const myQueued = newQueuedBets.filter((b: any) => b.userId === profile.uid);
+
+        setPanel1(prev => {
+          const active = myActive.find((b: any) => b.panel === 1);
+          const queued = myQueued.find((b: any) => b.panel === 1);
+          if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
+          if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
+          if (newGameState === 'waiting' && !prev.isAutoBet) return { ...prev, isBetPlaced: false, isQueued: false };
+          return prev;
+        });
+
+        setPanel2(prev => {
+          const active = myActive.find((b: any) => b.panel === 2);
+          const queued = myQueued.find((b: any) => b.panel === 2);
+          if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
+          if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
+          if (newGameState === 'waiting' && !prev.isAutoBet) return { ...prev, isBetPlaced: false, isQueued: false };
+          return prev;
+        });
+      }
+
       currentRoundRef.current = data.currentRound;
       setCrashValue(data.nextCrashValue);
       setIsConnected(true);
@@ -249,16 +276,16 @@ export default function Home() {
   useEffect(() => {
     if (gameState === 'waiting') {
       const autoPlace = async () => {
-        if ((panel1.isAutoBet || panel1.isQueued) && !panel1.isBetPlaced && !isPlacingBet.current.panel1) {
+        if (panel1.isAutoBet && !panel1.isBetPlaced && !isPlacingBet.current.panel1) {
           await handlePlaceBet(1);
         }
-        if ((panel2.isAutoBet || panel2.isQueued) && !panel2.isBetPlaced && !isPlacingBet.current.panel2) {
+        if (panel2.isAutoBet && !panel2.isBetPlaced && !isPlacingBet.current.panel2) {
           await handlePlaceBet(2);
         }
       };
       autoPlace();
     }
-  }, [gameState, panel1.isAutoBet, panel2.isAutoBet, panel1.isBetPlaced, panel2.isBetPlaced, panel1.isQueued, panel2.isQueued, profile?.balance]);
+  }, [gameState, panel1.isAutoBet, panel2.isAutoBet, panel1.isBetPlaced, panel2.isBetPlaced, overriddenBalance, profile?.balance]);
 
   useEffect(() => {
     if (gameState === 'flying') {
@@ -270,17 +297,8 @@ export default function Home() {
     const p = panelIdx === 1 ? panel1 : panel2;
     if (!profile) return;
     
-    // If plane is flying, queue the bet
-    if (gameState === 'flying' || gameState === 'crashed') {
-      if (panelIdx === 1) setPanel1(prev => ({ ...prev, isQueued: true }));
-      else setPanel2(prev => ({ ...prev, isQueued: true }));
-      return;
-    }
-
-    if (gameState !== 'waiting') return;
-    
     const panelKey = panelIdx === 1 ? 'panel1' : 'panel2';
-    if (isPlacingBet.current[panelKey] || p.isBetPlaced) return;
+    if (isPlacingBet.current[panelKey] || p.isBetPlaced || p.isQueued) return;
     
     // Use the most up-to-date balance for the check
     const currentBalance = overriddenBalance ?? profile?.balance ?? 0;
@@ -294,6 +312,8 @@ export default function Home() {
 
     isPlacingBet.current[panelKey] = true;
     try {
+      const isNextRound = gameState === 'flying' || gameState === 'crashed';
+      
       const response = await fetch('/api/game/bet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -315,8 +335,12 @@ export default function Home() {
         setOverriddenBalance(resData.newBalance);
       }
 
-      if (panelIdx === 1) setPanel1(prev => ({ ...prev, isBetPlaced: true, hasCashedOut: false, isQueued: false }));
-      else setPanel2(prev => ({ ...prev, isBetPlaced: true, hasCashedOut: false, isQueued: false }));
+      const update = isNextRound 
+        ? { isQueued: true, isBetPlaced: false, hasCashedOut: false }
+        : { isBetPlaced: true, hasCashedOut: false, isQueued: false };
+
+      if (panelIdx === 1) setPanel1(prev => ({ ...prev, ...update }));
+      else setPanel2(prev => ({ ...prev, ...update }));
     } catch (e) {
       console.error(e);
     } finally {
@@ -431,7 +455,7 @@ export default function Home() {
         
         <div className="flex items-center gap-2 sm:gap-4">
            <Link 
-             to="/deposit"
+             to="/profile"
              className="bg-black/60 rounded-full px-2 py-1 sm:px-5 sm:py-1.5 flex items-center gap-1 sm:gap-2 border border-[#28a745]/30 shadow-inner hover:bg-black/40 transition-colors group"
            >
               <Wallet className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#28a745] group-hover:scale-110 transition-transform" />
@@ -499,7 +523,7 @@ export default function Home() {
                       <User className="w-6 h-6 text-white" />
                    </div>
                    <div className="flex flex-col">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider">{profile?.email.split('@')[0]}</span>
+                      <span className="text-xs font-bold text-white uppercase tracking-wider">{profile?.displayName || profile?.email.split('@')[0]}</span>
                       <button className="text-[10px] text-[#F27D26] font-bold uppercase hover:underline">Change Avatar</button>
                    </div>
                 </div>
@@ -548,13 +572,24 @@ export default function Home() {
                     <User className="w-4 h-4 text-white/40" />
                     <span className="text-xs font-medium text-white/70">My Profile</span>
                   </Link>
+
+                  {(profile?.isAdmin || profile?.email === 'hr2078290@gmail.com') && (
+                    <Link 
+                      to="/admin"
+                      onClick={() => setIsMenuOpen(false)}
+                      className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all text-left bg-white/5 border border-white/5"
+                    >
+                      <ShieldAlert className="w-4 h-4 text-[#F27D26]" />
+                      <span className="text-xs font-bold text-[#F27D26] uppercase">Admin Control</span>
+                    </Link>
+                  )}
                   <Link 
-                    to="/deposit"
+                    to="/referral"
                     onClick={() => setIsMenuOpen(false)}
                     className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all text-left"
                   >
-                    <Wallet className="w-4 h-4 text-white/40" />
-                    <span className="text-xs font-medium text-white/70">My Wallet</span>
+                    <Users className="w-4 h-4 text-white/40" />
+                    <span className="text-xs font-medium text-white/70">My Referrals</span>
                   </Link>
                   <button 
                     onClick={fetchBetHistory}
@@ -960,41 +995,74 @@ export default function Home() {
                </div>
                
                <div className="flex items-center justify-between text-[10px] font-bold text-white/40 uppercase tracking-widest px-2">
-                  <span>{historyTab === 'top' ? 'Rank / Value' : 'Round / Multiplier'}</span>
-                  <span>Date</span>
+                  <span>{historyTab === 'all' ? 'Bet' : historyTab === 'top' ? 'Rank / Value' : 'Round / Multiplier'}</span>
+                  <span>{historyTab === 'all' ? 'Status' : 'Date'}</span>
                </div>
             </div>
             
             <div className="flex-1 space-y-2 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10 max-h-[500px]">
-              {(historyTab === 'all' || historyTab === 'previous' ? history : topHistory).map((h, i) => (
-                <div 
-                  key={i} 
-                  className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:bg-white/5 ${
-                    h.value >= 10 ? 'bg-pink-500/5 border-pink-500/10' : 
-                    h.value >= 2 ? 'bg-purple-500/5 border-purple-500/10' :
-                    'bg-white/5 border-white/5'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] font-mono text-white/20">#{i + 1}</span>
-                    <span className={`font-mono font-bold text-sm ${
-                      h.value >= 10 ? 'text-pink-500' : 
-                      h.value >= 2 ? 'text-purple-400' :
-                      'text-white/60'
-                    }`}>
-                      {h.value.toFixed(2)}x
-                    </span>
-                  </div>
-                  <span className="text-[8px] font-mono text-white/20 uppercase">
-                    {h.timestamp ? new Date(h.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
-                  </span>
-                </div>
-              ))}
-              {(historyTab === 'all' ? history : topHistory).length === 0 && (
-                <div className="text-center py-20 text-white/10 uppercase tracking-widest text-[10px] font-bold italic">
-                  Gathering flight logs...
-                </div>
-              )}
+               {historyTab === 'all' ? (
+                 activeBets.filter(b => b.userId === profile?.uid).map((bet, i) => (
+                   <div 
+                     key={bet.id || i} 
+                     className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:bg-white/5 ${
+                       bet.status === 'cashed_out' ? 'bg-[#28a745]/5 border-[#28a745]/10' : 'bg-white/5 border-white/5'
+                     }`}
+                   >
+                     <div className="flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] font-black text-[#F27D26]">
+                          {(bet.displayName || bet.email || 'P').substring(0, 2).toUpperCase()}
+                       </div>
+                       <div>
+                          <div className="text-xs font-black text-white/80 line-clamp-1 max-w-[80px]">
+                            {bet.displayName || (bet.email ? bet.email.split('@')[0] : 'Pilot')}
+                          </div>
+                          <div className="text-[10px] font-mono text-[#F27D26]">₹{bet.amount}</div>
+                       </div>
+                     </div>
+                     <div className="text-right">
+                       {bet.status === 'cashed_out' ? (
+                         <div className="flex flex-col items-end">
+                            <span className="text-[10px] font-black text-[#28a745] font-mono">{bet.cashoutValue?.toFixed(2)}x</span>
+                            <span className="text-[9px] font-black text-white/60 font-mono">₹{bet.winAmount?.toFixed(2)}</span>
+                         </div>
+                       ) : (
+                         <span className="text-[10px] font-bold text-white/20 uppercase tracking-widest italic animate-pulse">Flying...</span>
+                       )}
+                     </div>
+                   </div>
+                 ))
+               ) : (
+                 (historyTab === 'previous' ? history : topHistory).map((h, i) => (
+                   <div 
+                     key={i} 
+                     className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:bg-white/5 ${
+                       h.value >= 10 ? 'bg-pink-500/5 border-pink-500/10' : 
+                       h.value >= 2 ? 'bg-purple-500/5 border-purple-500/10' :
+                       'bg-white/5 border-white/5'
+                     }`}
+                   >
+                     <div className="flex items-center gap-3">
+                       <span className="text-[10px] font-mono text-white/20">#{i + 1}</span>
+                       <span className={`font-mono font-bold text-sm ${
+                         h.value >= 10 ? 'text-pink-500' : 
+                         h.value >= 2 ? 'text-purple-400' :
+                         'text-white/60'
+                       }`}>
+                         {h.value.toFixed(2)}x
+                       </span>
+                     </div>
+                     <span className="text-[8px] font-mono text-white/20 uppercase">
+                       {h.timestamp ? new Date(h.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                     </span>
+                   </div>
+                 ))
+               )}
+               {((historyTab === 'all' ? activeBets : (historyTab === 'previous' ? history : topHistory)).length === 0) && (
+                 <div className="text-center py-20 text-white/10 uppercase tracking-widest text-[10px] font-bold italic">
+                   {historyTab === 'all' ? 'Waiting for bets...' : 'Gathering flight logs...'}
+                 </div>
+               )}
             </div>
             
             <div className="mt-auto pt-4 border-t border-white/5 flex items-center justify-between">

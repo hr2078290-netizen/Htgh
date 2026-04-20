@@ -2,13 +2,37 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { Plane, Calendar, Shield, Wallet, Users, Plus, History, ArrowDownLeft, ArrowUpRight, Clock, Zap } from 'lucide-react';
+import { collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { Plane, Calendar, Shield, Wallet, Users, Plus, History, ArrowDownLeft, ArrowUpRight, Clock, Zap, User, Edit2, Check } from 'lucide-react';
 
 export default function Profile() {
   const { profile, user } = useAuth();
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(true);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [isSavingName, setIsSavingName] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setNewName(profile.displayName || profile.email.split('@')[0]);
+    }
+  }, [profile]);
+
+  const handleUpdateName = async () => {
+    if (!profile || !newName.trim()) return;
+    setIsSavingName(true);
+    try {
+      await updateDoc(doc(db, 'users', profile.uid), {
+        displayName: newName.trim()
+      });
+      setIsEditingName(false);
+    } catch (e) {
+      console.error("Error updating name:", e);
+    } finally {
+      setIsSavingName(false);
+    }
+  };
 
   useEffect(() => {
     if (!profile) return;
@@ -74,7 +98,44 @@ export default function Profile() {
                <Plane className="w-8 h-8 text-[#F27D26] transform -rotate-45 drop-shadow-[0_0_15px_rgba(242,125,38,0.5)]" />
             </div>
             <div className="flex-1 pb-1">
-               <h1 className="text-2xl font-black tracking-tighter uppercase italic text-white leading-tight">{profile.email.split('@')[0]}</h1>
+               <div className="flex items-center justify-center md:justify-start gap-2">
+                 {isEditingName ? (
+                   <div className="flex items-center gap-2">
+                     <input 
+                       value={newName}
+                       onChange={(e) => setNewName(e.target.value)}
+                       className="bg-black/40 border border-[#F27D26]/50 rounded-lg px-3 py-1 text-white text-xl font-black italic uppercase italic tracking-tighter w-48 outline-none"
+                       placeholder="Enter Name"
+                       maxLength={16}
+                     />
+                     <button 
+                       disabled={isSavingName}
+                       onClick={handleUpdateName}
+                       className="p-2 rounded-lg bg-green-500 hover:bg-green-600 text-black transition-all"
+                     >
+                       <Check className="w-4 h-4" />
+                     </button>
+                     <button 
+                       onClick={() => setIsEditingName(false)}
+                       className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-all uppercase text-[8px] font-black"
+                     >
+                       Esc
+                     </button>
+                   </div>
+                 ) : (
+                   <>
+                     <h1 className="text-2xl font-black tracking-tighter uppercase italic text-white leading-tight">
+                       {profile.displayName || profile.email.split('@')[0]}
+                     </h1>
+                     <button 
+                       onClick={() => setIsEditingName(true)}
+                       className="p-1 text-white/20 hover:text-[#F27D26] transition-colors"
+                     >
+                       <Edit2 className="w-3.5 h-3.5" />
+                     </button>
+                   </>
+                 )}
+               </div>
                <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 text-white/40 text-[8px] font-bold uppercase tracking-widest mt-0.5">
                  <span className="flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
                     <Shield className="w-2.5 h-2.5 text-[#F27D26]"/> {profile.isAdmin ? 'Admin' : 'Member'}

@@ -1,6 +1,7 @@
 export interface UserProfile {
   uid: string;
   email: string;
+  displayName?: string;
   balance: number;
   referralBalance: number; // Commission that can be used for bets but not withdrawn
   isAdmin: boolean;

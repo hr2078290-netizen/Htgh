@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
@@ -11,7 +11,14 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [referralCodeInput, setReferralCodeInput] = useState('');
+  const [searchParams] = useSearchParams();
   const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    const ref = searchParams.get('ref');
+    if (ref) setReferralCodeInput(ref.toUpperCase());
+  }, [searchParams]);
+
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -43,6 +50,7 @@ export default function Register() {
       const newProfile: UserProfile = {
         uid: u.uid,
         email: u.email || '',
+        displayName: u.email ? u.email.split('@')[0] : 'Pilot',
         balance: 0,
         referralBalance: 0,
         isAdmin: u.email === 'hr2078290@gmail.com', // Auto-grant admin for user request

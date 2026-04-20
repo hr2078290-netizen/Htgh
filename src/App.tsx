@@ -8,6 +8,7 @@ import Register from "./pages/Register";
 import Profile from "./pages/Profile";
 import Deposit from "./pages/Deposit";
 import Withdrawal from "./pages/Withdrawal";
+import Referral from "./pages/Referral";
 import TransactionHistory from "./pages/TransactionHistory";
 import AdminPanel from "./pages/AdminPanel";
 import Navbar from "./components/Navbar";
@@ -18,7 +19,7 @@ function ProtectedRoute({ children, adminOnly = false }: { children: React.React
 
   if (loading) return <div className="min-h-screen bg-[#050505] flex items-center justify-center text-white">Loading...</div>;
   if (!user) return <Navigate to="/login" />;
-  if (adminOnly && !profile?.isAdmin) return <Navigate to="/" />;
+  if (adminOnly && !profile?.isAdmin && profile?.email !== 'hr2078290@gmail.com') return <Navigate to="/" />;
   if (profile?.status === 'banned') return <div className="min-h-screen bg-[#050505] flex items-center justify-center text-red-500">Your account has been banned.</div>;
 
   return <>{children}</>;
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
             <Route path="/deposit" element={<ProtectedRoute><Deposit /></ProtectedRoute>} />
+            <Route path="/referral" element={<ProtectedRoute><Referral /></ProtectedRoute>} />
             <Route path="/withdrawal" element={<ProtectedRoute><Withdrawal /></ProtectedRoute>} />
             <Route path="/transactions" element={<ProtectedRoute><TransactionHistory /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel /></ProtectedRoute>} />

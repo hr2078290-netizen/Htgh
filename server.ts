@@ -101,11 +101,13 @@ async function startServer() {
     isManualMode: false,
     manualOverrideNextValue: null as number | null,
     history: [] as any[],
-    activeBets: [] as any[]
+    activeBets: [] as any[],
+    queuedBets: [] as any[]
   };
 
   // SSE Clients
   let clients: any[] = [];
+  let fakeUserIdCounter = 251500;
 
   const broadcastState = () => {
     const data = JSON.stringify({
@@ -162,7 +164,8 @@ async function startServer() {
         gameStateMemory.multiplier = 1.0;
         gameStateMemory.currentRound++;
         gameStateMemory.countdownEndTime = now + 6000; // Shorter waiting time (6s) like real Aviator
-        gameStateMemory.activeBets = [];
+        gameStateMemory.activeBets = [...gameStateMemory.queuedBets];
+        gameStateMemory.queuedBets = [];
         broadcastState();
       }
     } else if (gameStateMemory.status === 'waiting') {
@@ -269,7 +272,6 @@ async function startServer() {
   // Betting API (Uses Ledger to save writes)
   app.post("/api/game/bet", async (req, res) => {
     const { userId, email, amount, panel } = req.body;
-    if (gameStateMemory.status !== 'waiting') return res.status(400).json({ error: "Round already started" });
     
     try {
       const user = await getLedgerUser(userId);
@@ -290,8 +292,14 @@ async function startServer() {
 
       user.dirty = true;
 
-      // Add to In-Memory active bets (Saves Quota)
-      gameStateMemory.activeBets.push({ id: `${userId}_${panel}`, userId, email, amount, panel, status: 'pending' });
+      const bet = { id: `${userId}_${panel}`, userId, email, amount, panel, status: 'pending' };
+
+      if (gameStateMemory.status === 'waiting') {
+        gameStateMemory.activeBets.push(bet);
+      } else {
+        gameStateMemory.queuedBets.push(bet);
+      }
+      
       broadcastState();
       
       res.json({ 
@@ -347,24 +355,35 @@ async function startServer() {
 
   app.post("/api/game/cancel", async (req, res) => {
     const { userId, panel } = req.body;
-    if (gameStateMemory.status !== 'waiting') {
-      return res.status(400).json({ error: "Round already started, cannot cancel" });
+    
+    let betIndex = -1;
+    let isQueued = false;
+
+    if (gameStateMemory.status === 'waiting') {
+      betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
+    } else {
+      betIndex = gameStateMemory.queuedBets.findIndex(b => b.userId === userId && b.panel === panel);
+      isQueued = true;
     }
 
-    const betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
     if (betIndex === -1) {
       return res.status(400).json({ error: "No pending bet to cancel" });
     }
 
-    const bet = gameStateMemory.activeBets[betIndex];
+    const bet = isQueued ? gameStateMemory.queuedBets[betIndex] : gameStateMemory.activeBets[betIndex];
+
     try {
       // Refund via Ledger
       const user = await getLedgerUser(userId);
       user.balance += bet.amount;
       user.dirty = true;
 
-      // Remove from in-memory bets
-      gameStateMemory.activeBets.splice(betIndex, 1);
+      // Remove from memory
+      if (isQueued) {
+        gameStateMemory.queuedBets.splice(betIndex, 1);
+      } else {
+        gameStateMemory.activeBets.splice(betIndex, 1);
+      }
       
       broadcastState();
       res.json({ 

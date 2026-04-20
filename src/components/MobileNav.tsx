@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Plane, Wallet, User, History } from 'lucide-react';
+import { Plane, Wallet, User, History, Users } from 'lucide-react';
 
 export default function MobileNav() {
   return (
@@ -15,11 +15,11 @@ export default function MobileNav() {
         </NavLink>
         
         <NavLink 
-          to="/deposit" 
+          to="/referral" 
           className={({ isActive }) => `flex flex-col items-center gap-1 transition-all ${isActive ? 'text-[#f27d26] scale-110' : 'text-white/40'}`}
         >
-          <Wallet className="w-5 h-5 flex-shrink-0" />
-          <span className="text-[9px] font-bold uppercase tracking-tighter">Wallet</span>
+          <Users className="w-5 h-5 flex-shrink-0" />
+          <span className="text-[9px] font-bold uppercase tracking-tighter">Referral</span>
         </NavLink>
 
         <NavLink 
