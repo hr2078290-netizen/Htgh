@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'hr2078290@gmail.com'
+      );
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin() 
+                  || (isSignedIn() && isOwner(userId))
+                  || (resource.data.referralCode != null); // Allow public list for referral check
+      allow create: if isSignedIn() 
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.balance == 0 
+                    && request.resource.data.isAdmin == (request.auth.token.email == 'hr2078290@gmail.com');
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance', 'referralBalance']));
+    }
+
+    match /settings/config {
+      // DEVELOPMENT ONLY: Public read/write to bypass auth restrictions in sandbox
+      allow read, write: if true;
+    }
+
+    match /history/{historyId} {
+      // DEVELOPMENT ONLY: Public read/write to bypass auth restrictions in sandbox
+      allow read, write: if true;
+    }
+
+    match /active_bets/{betId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /user_bets/{betId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /deposits/{depositId} {
+      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() 
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() 
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+    }
+
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}

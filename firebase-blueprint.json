@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account details including balance and admin status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "balance": { "type": "number" },
+        "isAdmin": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "banned"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "balance"]
+    },
+    "Deposit": {
+      "title": "Deposit Request",
+      "description": "Manual UPI deposit request with proof.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "amount": { "type": "number" },
+        "transactionId": { "type": "string" },
+        "proofUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "amount", "transactionId", "status"]
+    },
+    "Withdrawal": {
+      "title": "Withdrawal Request",
+      "description": "Withdrawal request to a UPI ID.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "amount": { "type": "number" },
+        "upiId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "amount", "upiId", "status"]
+    },
+    "GameSettings": {
+      "title": "Game Settings",
+      "description": "Global game configuration controlled by admin.",
+      "type": "object",
+      "properties": {
+        "nextCrashValue": { "type": "number" },
+        "currentUpiId": { "type": "string" },
+        "currentQrCode": { "type": "string" }
+      }
+    },
+    "GameHistory": {
+      "title": "Game History",
+      "description": "Previous crash values.",
+      "type": "object",
+      "properties": {
+        "value": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    },
+    "/deposits/{depositId}": {
+      "schema": "Deposit",
+      "description": "Deposit requests."
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": "Withdrawal",
+      "description": "Withdrawal requests."
+    },
+    "/settings/config": {
+      "schema": "GameSettings",
+      "description": "Global game settings."
+    },
+    "/history/{historyId}": {
+      "schema": "GameHistory",
+      "description": "Game multiplier history."
+    },
+    "/admins/{userId}": {
+      "schema": { "type": "object", "properties": { "uid": { "type": "string" } } },
+      "description": "Admin uids."
+    }
+  }
+}
