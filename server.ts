@@ -6,6 +6,8 @@ import { initializeApp as initializeClientApp } from "firebase/app";
 import { initializeFirestore, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
 import { getAuth as getAuthClient, signInAnonymously } from "firebase/auth";
 import fs from "fs";
+import { createServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
 // ESM __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -100,8 +102,9 @@ async function startServer() {
 
   app.use(express.json());
 
-  // SSE Clients
-  let clients: any[] = [];
+  // Real-time Clients (SSE & WS)
+  let sseClients: any[] = [];
+  let wsClients: Set<WebSocket> = new Set();
   let fakeUserIdCounter = 251500;
 
   const broadcastState = () => {
@@ -109,8 +112,37 @@ async function startServer() {
       ...gameStateMemory,
       serverTime: Date.now()
     });
-    clients.forEach(client => client.res.write(`data: ${data}\n\n`));
+    // Send to SSE
+    sseClients.forEach(client => client.res.write(`data: ${data}\n\n`));
+    // Send to WS
+    wsClients.forEach(ws => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
   };
+
+  // WebSocket Server Setup
+  const server = createServer(app);
+  const wss = new WebSocketServer({ server, path: '/api/game/ws' });
+
+  wss.on('connection', (ws) => {
+    console.log("[WS] New client connected");
+    wsClients.add(ws);
+    
+    // Send initial state
+    ws.send(JSON.stringify({ ...gameStateMemory, serverTime: Date.now() }));
+
+    ws.on('close', () => {
+      console.log("[WS] Client disconnected");
+      wsClients.delete(ws);
+    });
+
+    ws.on('error', (err) => {
+      console.error("[WS] Error:", err);
+      wsClients.delete(ws);
+    });
+  });
 
   // SSE Endpoint
   app.get("/api/game/stream", (req, res) => {
@@ -122,7 +154,7 @@ async function startServer() {
 
     const clientId = Date.now();
     const newClient = { id: clientId, res };
-    clients.push(newClient);
+    sseClients.push(newClient);
 
     const keepAlive = setInterval(() => {
       res.write(': keep-alive\n\n');
@@ -130,7 +162,7 @@ async function startServer() {
 
     req.on('close', () => {
       clearInterval(keepAlive);
-      clients = clients.filter(c => c.id !== clientId);
+      sseClients = sseClients.filter(c => c.id !== clientId);
     });
 
     // Send initial payload
@@ -267,7 +299,7 @@ async function startServer() {
     return entry;
   };
 
-  // Sync Ledger to Firestore every 60 seconds (Increased from 30s to save quota)
+  // Sync Ledger to Firestore every 10 seconds (Reduced from 60s for better responsiveness on refresh)
   setInterval(async () => {
     // 1. Sync User Balances/Bets
     const dirtyUsers = Array.from(userLedger.entries()).filter(([_, data]) => data.dirty);
@@ -293,7 +325,7 @@ async function startServer() {
       }
     }
 
-    // 2. Sync Global Config (Every 1 minute)
+    // 2. Sync Global Config (Every 10 seconds)
     try {
       const configRef = docClient(dbClient, 'settings', 'config');
       await updateDocClient(configRef, {
@@ -305,7 +337,7 @@ async function startServer() {
     } catch (e: any) {
       if (!e.message?.includes('quota')) console.error("[LEDGER] Config sync failed:", e.message);
     }
-  }, 60000);
+  }, 10000);
 
   // Betting API (Uses Ledger to save writes)
   app.post("/api/game/bet", async (req, res) => {
@@ -401,6 +433,7 @@ async function startServer() {
 
   app.post("/api/game/cancel", async (req, res) => {
     const { userId, panel } = req.body;
+    console.log(`[CANCEL] Request from ${userId} for panel ${panel}`);
     
     let betIndex = -1;
     let isQueued = false;
@@ -413,16 +446,19 @@ async function startServer() {
     }
 
     if (betIndex === -1) {
+      console.warn(`[CANCEL] No pending bet found for user ${userId} on panel ${panel}. State: ${gameStateMemory.status}`);
       return res.status(400).json({ error: "No pending bet to cancel" });
     }
 
     const bet = isQueued ? gameStateMemory.queuedBets[betIndex] : gameStateMemory.activeBets[betIndex];
+    console.log(`[CANCEL] Found bet to cancel: ${bet.id}. Amount: ${bet.amount}`);
 
     try {
       // Refund via Ledger
       const user = await getLedgerUser(userId);
       user.balance += bet.amount;
       user.dirty = true;
+      console.log(`[CANCEL] Refunded ${bet.amount} to user ${userId}. New balance: ${user.balance}`);
 
       // Remove from memory
       if (isQueued) {
@@ -487,8 +523,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Live Domain: https://jalwa369.com`);
   });
 }
 

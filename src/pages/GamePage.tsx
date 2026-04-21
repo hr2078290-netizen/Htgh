@@ -7,6 +7,20 @@ import { Plane, History, TrendingUp, AlertCircle, TrendingDown, Volume2, VolumeX
 import { GameSettings, GameHistoryEntry } from '../types';
 import { useAuth } from '../lib/AuthContext';
 
+const getNetworkConfig = () => {
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('asia-southeast1.run.app');
+  // Use requested live domain for production, otherwise use current host
+  const domain = isLocal ? window.location.host : 'jalwa369.com';
+  const protocol = window.location.protocol;
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  return {
+    apiBase: `${protocol}//${domain}/api`,
+    wsUrl: `${wsProtocol}//${domain}/api/game/ws`,
+    streamUrl: `${protocol}//${domain}/api/game/stream`
+  };
+};
+
 export default function Home() {
   const { profile } = useAuth();
   const navigate = useNavigate();
@@ -121,10 +135,20 @@ export default function Home() {
         if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
         if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
         
-        // Only reset if the round has changed and we are in waiting state
-        if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+        // If bet is suddenly missing from server but was locally placed/queued, check if it was cancelled
+        // Or if we just transitioned rounds
+        if (roundShifted && newGameState === 'waiting') {
           return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
         }
+        
+        // Handle cancellation: if it's NOT on server but we think it is placed, reset it
+        if (!active && !queued && (prev.isBetPlaced || prev.isQueued)) {
+          // If we are in flying/crashed, it might be a loss/win already handled
+          if (newGameState === 'waiting') {
+            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+          }
+        }
+
         return prev;
       });
 
@@ -135,9 +159,16 @@ export default function Home() {
         if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
         if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
         
-        if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+        if (roundShifted && newGameState === 'waiting') {
           return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
         }
+
+        if (!active && !queued && (prev.isBetPlaced || prev.isQueued)) {
+          if (newGameState === 'waiting') {
+            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+          }
+        }
+
         return prev;
       });
     }
@@ -161,10 +192,11 @@ export default function Home() {
 
   const startFallbackPolling = () => {
     if (fallbackTimerRef.current) return;
+    const config = getNetworkConfig();
     console.log("[GAME] Starting fallback polling...");
     fallbackTimerRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/game/state?t=${Date.now()}`); // Added cache busting for custom domains
+        const res = await fetch(`${config.apiBase}/game/state?t=${Date.now()}`); // Added cache busting for custom domains
         if (res.ok) {
           const data = await res.json();
           handleGameData(data);
@@ -178,9 +210,10 @@ export default function Home() {
   };
 
   const fetchBetHistory = async () => {
+    const config = getNetworkConfig();
     if (!profile) return;
     try {
-      const res = await fetch(`/api/game/my-history?userId=${profile.uid}`);
+      const res = await fetch(`${config.apiBase}/game/my-history?userId=${profile.uid}`);
       const data = await res.json();
       setUserBetHistory(data.history || []);
       setIsHistoryModalOpen(true);
@@ -195,66 +228,108 @@ export default function Home() {
     navigate('/login');
   };
 
-  // Sync game state from SSE Stream (Solves Quota Error)
+  // Sync game state from WebSocket (Preferred) or SSE Fallback
   useEffect(() => {
+    const config = getNetworkConfig();
+    
     // Initialize audio
     const music = new Audio('/u_o0a9yfwhsr-aviator-music-394813.mp3');
     music.loop = true;
     flightAudio.current = music;
     crashAudio.current = new Audio('https://assets.mixkit.co/active_storage/sfx/264/264-preview.mp3');
 
-    console.log("[SSE] Initiating connection...");
-    const eventSource = new EventSource(`/api/game/stream?t=${Date.now()}`);
+    let socket: WebSocket | null = null;
+    let eventSource: EventSource | null = null;
+    let isMounted = true;
 
-    eventSource.onopen = () => {
-      console.log("[SSE] Connection established successfully");
-      setIsConnected(true);
-    };
+    const connectWS = () => {
+      console.log("[WS] Initiating connection to:", config.wsUrl);
+      socket = new WebSocket(config.wsUrl);
 
-    eventSource.onmessage = (event) => {
-      // Clear fallback timer if SSE is working
-      if (fallbackTimerRef.current) {
-        clearInterval(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
-
-      if (!event.data || event.data.startsWith(':')) {
-        // Keep-alive heartbeat received
+      socket.onopen = () => {
+        if (!isMounted) return;
+        console.log("[WS] Connection established successfully");
         setIsConnected(true);
-        return;
-      }
-      
-      try {
-        const data = JSON.parse(event.data);
-        handleGameData(data);
-        setIsConnected(true);
-      } catch (e) {
-        console.error("[SSE] Parse error:", e);
-      }
+        if (fallbackTimerRef.current) {
+          clearInterval(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+      };
+
+      socket.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const data = JSON.parse(event.data);
+          handleGameData(data);
+          setIsConnected(true);
+        } catch (e) {
+          console.error("[WS] Parse error:", e);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error("[WS] Connection error:", err);
+        setIsConnected(false);
+      };
+
+      socket.onclose = () => {
+        if (!isMounted) return;
+        console.log("[WS] Connection closed. Falling back to SSE/Polling...");
+        setIsConnected(false);
+        socket = null;
+        connectSSE(); // Try SSE if WS fails
+      };
     };
 
-    eventSource.onerror = (e) => {
-      console.error("[SSE] Connection failed:", e);
-      setIsConnected(false);
-      eventSource.close();
-      // Start fallback if SSE fails
-      startFallbackPolling();
-      // Auto-retry SSE in 5s
-      setTimeout(() => setRetryKey(prev => prev + 1), 5000);
+    const connectSSE = () => {
+      console.log("[SSE] Initiating fallback connection...");
+      eventSource = new EventSource(`${config.streamUrl}?t=${Date.now()}`);
+
+      eventSource.onopen = () => {
+        if (!isMounted) return;
+        console.log("[SSE] Connection established");
+        setIsConnected(true);
+      };
+
+      eventSource.onmessage = (event) => {
+        if (!isMounted) return;
+        if (!event.data || event.data.startsWith(':')) return;
+        try {
+          const data = JSON.parse(event.data);
+          handleGameData(data);
+          setIsConnected(true);
+        } catch (e) {
+          console.error("[SSE] Parse error:", e);
+        }
+      };
+
+      eventSource.onerror = (e) => {
+        if (!isMounted) return;
+        console.error("[SSE] Connection failed");
+        setIsConnected(false);
+        eventSource?.close();
+        eventSource = null;
+        startFallbackPolling();
+        // Global retry logic
+        setTimeout(() => {
+          if (isMounted) setRetryKey(prev => prev + 1);
+        }, 5000);
+      };
     };
+
+    // Start with WebSocket
+    connectWS();
 
     return () => {
-      eventSource.close();
+      isMounted = false;
+      if (socket) socket.close();
+      if (eventSource) eventSource.close();
       if (flightAudio.current) {
         flightAudio.current.pause();
         flightAudio.current = null;
       }
-      if (crashAudio.current) {
-        crashAudio.current.pause();
-        crashAudio.current = null;
-      }
     };
-  }, [retryKey]);
+  }, [retryKey, profile]);
 
   // Update audio volume and behavior when state changes
   useEffect(() => {
@@ -318,7 +393,8 @@ export default function Home() {
       handleLocalCrashCleanup(lastCrashValue);
       // Automatically refresh history to show last bet via Optimized API
       if (profile) {
-        fetch(`/api/game/my-history?userId=${profile.uid}`)
+        const config = getNetworkConfig();
+        fetch(`${config.apiBase}/game/my-history?userId=${profile.uid}`)
           .then(res => res.json())
           .then(data => {
             setUserBetHistory(data.history || []);
@@ -390,10 +466,11 @@ export default function Home() {
     }
 
     isPlacingBet.current[panelKey] = true;
+    const config = getNetworkConfig();
     try {
       const isNextRound = gameState === 'flying' || gameState === 'crashed';
       
-      const response = await fetch('/api/game/bet', {
+      const response = await fetch(`${config.apiBase}/game/bet`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -440,8 +517,9 @@ export default function Home() {
 
     if (!p.isBetPlaced || gameState !== 'waiting') return;
 
+    const config = getNetworkConfig();
     try {
-      const response = await fetch('/api/game/cancel', {
+      const response = await fetch(`${config.apiBase}/game/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -478,8 +556,9 @@ export default function Home() {
     if (panelIdx === 1) setPanel1(prev => ({ ...prev, hasCashedOut: true }));
     else setPanel2(prev => ({ ...prev, hasCashedOut: true }));
 
+    const config = getNetworkConfig();
     try {
-      const response = await fetch('/api/game/cashout', {
+      const response = await fetch(`${config.apiBase}/game/cashout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

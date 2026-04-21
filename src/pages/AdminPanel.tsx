@@ -5,6 +5,19 @@ import { Settings, Users, Wallet, Check, X, AlertCircle, TrendingUp, ShieldCheck
 import { GameSettings, DepositRequest, WithdrawalRequest, UserProfile, GameHistoryEntry } from '../types';
 import { useAuth } from '../lib/AuthContext';
 
+const getNetworkConfig = () => {
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('asia-southeast1.run.app');
+  const domain = isLocal ? window.location.host : 'jalwa369.com';
+  const protocol = window.location.protocol;
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  return {
+    apiBase: `${protocol}//${domain}/api`,
+    wsUrl: `${wsProtocol}//${domain}/api/game/ws`,
+    streamUrl: `${protocol}//${domain}/api/game/stream`
+  };
+};
+
 export default function AdminPanel() {
   const { profile } = useAuth();
   const [settings, setSettings] = useState<GameSettings>({ nextCrashValue: 1.5, currentUpiId: '', currentQrCode: '', depositBonusPercentage: 0 });
@@ -35,7 +48,8 @@ export default function AdminPanel() {
 
   // Sync game state from SSE Stream (Solves Quota Error)
   useEffect(() => {
-    const eventSource = new EventSource('/api/game/stream');
+    const config = getNetworkConfig();
+    const eventSource = new EventSource(config.streamUrl);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -91,9 +105,10 @@ export default function AdminPanel() {
   }, []);
 
   const updateSettings = async (field: string, value: any) => {
+    const config = getNetworkConfig();
     try {
       // 1. Update In-Memory via API (Fast & Quota-Free)
-      await fetch('/api/admin/game-config', {
+      await fetch(`${config.apiBase}/admin/game-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field, value })
