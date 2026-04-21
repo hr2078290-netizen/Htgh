@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeApp as initializeClientApp } from "firebase/app";
-import { getFirestore as getFirestoreClient, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
+import { initializeFirestore, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
 import { getAuth as getAuthClient, signInAnonymously } from "firebase/auth";
 import fs from "fs";
 
@@ -17,27 +17,28 @@ const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
 // Initialize Firebase Client (We will use this with an auth session for guaranteed access)
 const firebaseApp = initializeClientApp(firebaseConfig);
-const dbClient = getFirestoreClient(firebaseApp, firebaseConfig.firestoreDatabaseId || undefined);
+const dbClient = initializeFirestore(firebaseApp, {
+  experimentalForceLongPolling: true
+}, firebaseConfig.firestoreDatabaseId || undefined);
 const authClient = getAuthClient(firebaseApp);
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  console.log(`Starting server with Client-SDK + Auth (DB: ${firebaseConfig.firestoreDatabaseId || "(default)"})`);
+  console.log(`Starting server with Client-SDK (Long Polling) - DB: ${firebaseConfig.firestoreDatabaseId || "(default)"}`);
 
-  // Sign in anonymously to establish a session that Security Rules can trust
-  try {
-    const cred = await signInAnonymously(authClient);
-    console.log(`[SERVER] Authenticated as Anonymous User: ${cred.user.uid}`);
-  } catch (e) {
-    console.error("[SERVER] Failed to sign in anonymously:", e);
-  }
-
+  // Note: Anonymous Auth is disabled in this project, so we'll rely on permissive rules 
+  // for the server-side writes for now. 
+  
   // Force Initialize Config on Startup
   const forceInit = async () => {
     try {
-      console.log("[SERVER] Testing connection to Firestore...");
+      console.log("[SERVER] Testing connection to Firestore Client (Long Polling)...");
+      const testRef = docClient(dbClient, 'settings', 'health_check');
+      await setDocClient(testRef, { last_check: serverTimestampClient(), status: 'ok' });
+      console.log("[SERVER] Firestore connection successful.");
+      
       const configRef = docClient(dbClient, 'settings', 'config');
       const snap = await getDocClient(configRef);
       if (!snap.exists()) {
@@ -62,9 +63,8 @@ async function startServer() {
           });
         }
       }
-      console.log("[SERVER] Firestore connection successful.");
-    } catch (e) {
-      console.error("Critical Startup Init Error:", e);
+    } catch (e: any) {
+      console.error("Critical Startup Init Error (Client):", e.message || e);
     }
   };
   await forceInit();
@@ -131,7 +131,7 @@ async function startServer() {
 
     const keepAlive = setInterval(() => {
       res.write(': keep-alive\n\n');
-    }, 15000);
+    }, 10000); // 10s heartbeat for better proxy stability
 
     req.on('close', () => {
       clearInterval(keepAlive);
@@ -178,11 +178,12 @@ async function startServer() {
 
         // PERSIST CRASH TO FIRESTORE (Only once per round to save quota)
         const roundId = `round_${gameStateMemory.currentRound}`;
-        setDocClient(docClient(dbClient, 'history', roundId), {
+        const historyRef = docClient(dbClient, 'history', roundId);
+        setDocClient(historyRef, {
           ...histItem, 
           timestamp: serverTimestampClient()
         }).catch(e => {
-          console.error("HISTORY SAVE ERROR DETAILS:", e);
+          console.error("HISTORY SAVE ERROR DETAILS:", e.message || e);
         });
         
         // Calculate next crash value
@@ -228,10 +229,14 @@ async function startServer() {
   const getLedgerUser = async (userId: string) => {
     if (userLedger.has(userId)) return userLedger.get(userId)!;
     
+    console.log(`[LEDGER] Fetching user ${userId} from Firestore...`);
     // Fetch from Firestore
     const userRef = docClient(dbClient, 'users', userId);
     const snap = await getDocClient(userRef);
-    if (!snap.exists()) throw new Error("User record not found");
+    if (!snap.exists()) {
+      console.error(`[LEDGER] User ${userId} NOT FOUND in Firestore!`);
+      throw new Error("User record not found");
+    }
     
     const data = snap.data()!;
     const entry = { balance: data.balance || 0, referralBalance: data.referralBalance || 0, dirty: false };
@@ -262,12 +267,17 @@ async function startServer() {
   // Betting API (Uses Ledger to save writes)
   app.post("/api/game/bet", async (req, res) => {
     const { userId, email, amount, panel } = req.body;
+    console.log(`[BET] Request from ${userId} (${email}) for amount ${amount} on panel ${panel}`);
     
     try {
       const user = await getLedgerUser(userId);
+      console.log(`[BET] Found user ${userId}. Balance: ${user.balance}, Referral: ${user.referralBalance}`);
       const totalAvailable = user.balance + user.referralBalance;
 
-      if (totalAvailable < amount) return res.status(400).json({ error: "Insufficient balance" });
+      if (totalAvailable < amount) {
+        console.warn(`[BET] Insufficient balance for ${userId}: ${totalAvailable} < ${amount}`);
+        return res.status(400).json({ error: "Insufficient balance" });
+      }
 
       // Deduct from memory ledger
       let remainingToDeduct = amount;

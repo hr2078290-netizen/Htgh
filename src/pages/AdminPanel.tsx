@@ -724,6 +724,17 @@ export default function AdminPanel() {
                         </span>
                      </td>
                      <td className="py-4 text-right space-x-2">
+                        <button 
+                          onClick={async () => {
+                            if(confirm(`Add 5,000 INR to ${u.email}?`)) {
+                              await updateDoc(doc(db, 'users', u.uid), { balance: increment(5000) });
+                              alert('Balance added!');
+                            }
+                          }}
+                          className="p-2 rounded bg-green-500/10 hover:bg-green-500 text-green-500 hover:text-white transition-all font-bold uppercase text-[10px]"
+                        >
+                          +5k
+                        </button>
                         <button onClick={() => toggleBan(u)} className="p-2 rounded bg-white/5 hover:bg-red-500/20 text-white/40 hover:text-red-500 transition-all font-bold uppercase text-[10px]">
                           {u.status === 'active' ? 'Ban' : 'Unban'}
                         </button>

@@ -51,7 +51,7 @@ export default function Register() {
         uid: u.uid,
         email: u.email || '',
         displayName: u.email ? u.email.split('@')[0] : 'Pilot',
-        balance: 0,
+        balance: 500, // Signup Bonus
         referralBalance: 0,
         isAdmin: u.email === 'hr2078290@gmail.com', // Auto-grant admin for user request
         status: 'active',

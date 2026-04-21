@@ -346,7 +346,8 @@ export default function Home() {
 
       const resData = await response.json();
       if (!response.ok) {
-        if (!p.isAutoBet) alert(resData.error || 'Betting failed');
+        console.error("Bet error response:", resData);
+        if (!p.isAutoBet) alert(`Betting failed: ${resData.error || 'Server Error'}`);
         return;
       }
 
