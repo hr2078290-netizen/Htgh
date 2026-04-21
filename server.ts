@@ -31,43 +31,54 @@ async function startServer() {
   // Note: Anonymous Auth is disabled in this project, so we'll rely on permissive rules 
   // for the server-side writes for now. 
   
-  // Force Initialize Config on Startup
+  // Force Initialize Config on Startup (Non-blocking)
   const forceInit = async () => {
     try {
-      console.log("[SERVER] Testing connection to Firestore Client (Long Polling)...");
-      const testRef = docClient(dbClient, 'settings', 'health_check');
-      await setDocClient(testRef, { last_check: serverTimestampClient(), status: 'ok' });
-      console.log("[SERVER] Firestore connection successful.");
+      console.log("[SERVER] Loading initial config from Firestore...");
+      // We don't do the health check write anymore to save quota.
       
       const configRef = docClient(dbClient, 'settings', 'config');
       const snap = await getDocClient(configRef);
       if (!snap.exists()) {
         console.log("FORCE START: Config document missing. Creating initial state...");
-        await setDocClient(configRef, {
+        // We TRY to create it, but if it fails (quota), we just use defaults.
+        setDocClient(configRef, {
           status: 'waiting',
           nextCrashValue: 1.5,
           currentRound: 1,
           countdownEndTime: Date.now() + 5000
-        });
+        }).catch(e => console.error("Initial config creation failed (likely quota):", e.message));
       } else {
         const data = snap.data();
         console.log("Config document found. Current state:", data?.status);
+        
+        // Sync memory with persisted state
+        gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
+        gameStateMemory.currentRound = data.currentRound || 1;
+        gameStateMemory.isManualMode = !!data.isManualMode;
+        gameStateMemory.status = data.status || 'waiting';
+
         // If stuck in crashed or flying without timestamp, force reset
         if ((data?.status === 'crashed' && !data?.nextTransitionTime) || (data?.status === 'flying' && !data?.startTime)) {
-          console.log("Detected stuck state on startup. Resetting to waiting...");
-          await updateDocClient(configRef, {
-            status: 'waiting',
-            countdownEndTime: Date.now() + 5000,
-            startTime: null,
-            nextTransitionTime: null
-          });
+          console.log("Detected stuck state on startup. Resetting memory...");
+          gameStateMemory.status = 'waiting';
+          gameStateMemory.countdownEndTime = Date.now() + 5000;
         }
       }
+      // Load history (Non-blocking)
+      getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(15)))
+        .then(histSnap => {
+          gameStateMemory.history = histSnap.docs.map(d => d.data());
+          console.log(`[SERVER] Loaded ${gameStateMemory.history.length} history items.`);
+        })
+        .catch(e => console.error("History load failed (likely quota):", e.message));
+
     } catch (e: any) {
-      console.error("Critical Startup Init Error (Client):", e.message || e);
+      console.error("Non-critical Startup Init Error (Client):", e.message || e);
     }
   };
-  await forceInit();
+  // Start init but don't await it, allowing server to listen on PORT 3000 immediately
+  forceInit();
 
   // --- SERVER AUTHORITATIVE GAME STATE (IN-MEMORY) ---
   // This solves the Firestore "RESOURCE_EXHAUSTED" error by not writing state every round.
@@ -86,22 +97,6 @@ async function startServer() {
     activeBets: [] as any[],
     queuedBets: [] as any[]
   };
-
-  // Load initial settings from persistence
-  try {
-    const configRef = docClient(dbClient, 'settings', 'config');
-    const snap = await getDocClient(configRef);
-    if (snap.exists()) {
-      const data = snap.data()!;
-      gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
-      gameStateMemory.currentRound = data.currentRound || 1;
-      gameStateMemory.isManualMode = !!data.isManualMode;
-      gameStateMemory.status = data.status || 'waiting';
-    }
-    // Load history
-    const histSnap = await getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(15)));
-    gameStateMemory.history = histSnap.docs.map(d => d.data());
-  } catch (e) { console.error("Init Error:", e); }
 
   app.use(express.json());
 
@@ -139,7 +134,15 @@ async function startServer() {
     });
 
     // Send initial payload
-    res.write(`data: ${JSON.stringify(gameStateMemory)}\n\n`);
+    res.write(`data: ${JSON.stringify({ ...gameStateMemory, serverTime: Date.now() })}\n\n`);
+  });
+
+  // REST Fallback for Game State
+  app.get("/api/game/state", (req, res) => {
+    res.json({
+      ...gameStateMemory,
+      serverTime: Date.now()
+    });
   });
 
   // Game Loop (In-Memory)
@@ -183,7 +186,29 @@ async function startServer() {
           ...histItem, 
           timestamp: serverTimestampClient()
         }).catch(e => {
-          console.error("HISTORY SAVE ERROR DETAILS:", e.message || e);
+          if (!e.message?.includes('quota')) {
+            console.error("HISTORY SAVE ERROR DETAILS:", e.message || e);
+          }
+        });
+
+        // OPTIMIZED BET PERSISTENCE: Save to In-Memory Ledger + Local user docs (batched)
+        gameStateMemory.activeBets.forEach(async (bet) => {
+          if (bet.userId.startsWith('fake_')) return;
+          
+          try {
+            const user = await getLedgerUser(bet.userId);
+            const betResult = {
+              ...bet,
+              round: gameStateMemory.currentRound,
+              finalMultiplier: gameStateMemory.lastFinalValue,
+              timestamp: new Date().toISOString(),
+              status: bet.status === 'cashed_out' ? 'win' : 'loss'
+            };
+            user.recentBets = [betResult, ...user.recentBets].slice(0, 50);
+            user.dirty = true;
+          } catch (e) {
+            // User not in ledger or error fetching
+          }
         });
         
         // Calculate next crash value
@@ -224,13 +249,12 @@ async function startServer() {
   }, 200);
 
   // --- BALANCE LEDGER (In-Memory to save Firestore Quota) ---
-  const userLedger: Map<string, { balance: number, referralBalance: number, dirty: boolean }> = new Map();
+  const userLedger: Map<string, { balance: number, referralBalance: number, recentBets: any[], dirty: boolean }> = new Map();
 
   const getLedgerUser = async (userId: string) => {
     if (userLedger.has(userId)) return userLedger.get(userId)!;
     
     console.log(`[LEDGER] Fetching user ${userId} from Firestore...`);
-    // Fetch from Firestore
     const userRef = docClient(dbClient, 'users', userId);
     const snap = await getDocClient(userRef);
     if (!snap.exists()) {
@@ -239,7 +263,12 @@ async function startServer() {
     }
     
     const data = snap.data()!;
-    const entry = { balance: data.balance || 0, referralBalance: data.referralBalance || 0, dirty: false };
+    const entry = { 
+      balance: data.balance || 0, 
+      referralBalance: data.referralBalance || 0, 
+      recentBets: data.recentBets || [],
+      dirty: false 
+    };
     userLedger.set(userId, entry);
     return entry;
   };
@@ -249,17 +278,24 @@ async function startServer() {
     const dirtyUsers = Array.from(userLedger.entries()).filter(([_, data]) => data.dirty);
     if (dirtyUsers.length === 0) return;
 
-    console.log(`[LEDGER] Flushing ${dirtyUsers.length} dirty user balances to Firestore...`);
+    console.log(`[LEDGER] Flushing ${dirtyUsers.length} dirty user balances/bets to Firestore...`);
     for (const [userId, data] of dirtyUsers) {
       try {
         const userRef = docClient(dbClient, 'users', userId);
         await updateDocClient(userRef, { 
           balance: data.balance,
-          referralBalance: data.referralBalance
+          referralBalance: data.referralBalance,
+          recentBets: data.recentBets.slice(0, 50) 
         });
         data.dirty = false;
       } catch (e: any) {
-        console.error(`[LEDGER] Failed to sync user ${userId}:`, e.message || e);
+        if (e.message?.includes('RESOURCE_EXHAUSTED') || e.message?.includes('quota')) {
+          console.error(`[LEDGER] QUOTA EXCEEDED for ${userId}. Will retry in next flush.`);
+          // Keep dirty = true so we retry next time
+        } else {
+          console.error(`[LEDGER] Failed to sync user ${userId}:`, e.message || e);
+          data.dirty = false; // Stop retrying for non-quota fatal errors
+        }
       }
     }
   }, 30000);
@@ -292,7 +328,10 @@ async function startServer() {
 
       user.dirty = true;
 
-      const bet = { id: `${userId}_${panel}`, userId, email, amount, panel, status: 'pending' };
+      const targetRound = gameStateMemory.status === 'waiting' ? gameStateMemory.currentRound : gameStateMemory.currentRound + 1;
+      // High-resolution UUID-like ID to prevent React key collisions
+      const betId = `${userId}_${targetRound}_${panel}_${Math.random().toString(36).substring(2, 9)}`;
+      const bet = { id: betId, userId, email, amount, panel, status: 'pending', round: targetRound };
 
       if (gameStateMemory.status === 'waiting') {
         gameStateMemory.activeBets.push(bet);
@@ -394,6 +433,19 @@ async function startServer() {
     } catch (e: any) {
       console.error("[SERVER] Cancel error:", e.message || e);
       res.status(500).json({ error: "Cancellation failed: " + (e.message || "Unknown") });
+    }
+  });
+
+  // My Bets API (Optimized to return from ledger)
+  app.get("/api/game/my-history", async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: "No userId" });
+    
+    try {
+      const user = await getLedgerUser(userId as string);
+      res.json({ history: user.recentBets });
+    } catch (e) {
+      res.json({ history: [] });
     }
   });
 

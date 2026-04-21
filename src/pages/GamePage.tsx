@@ -48,21 +48,130 @@ export default function Home() {
   const flightAudio = useRef<HTMLAudioElement | null>(null);
   const crashAudio = useRef<HTMLAudioElement | null>(null);
 
+  const handleGameData = (data: any) => {
+    if (!data) return;
+    
+    const serverTime = data.serverTime || Date.now();
+    serverOffsetRef.current = Date.now() - serverTime;
+
+    const newGameState = data.status || 'waiting';
+    const newRound = data.currentRound || 0;
+    const roundShifted = newRound !== currentRoundRef.current;
+    
+    // Update basic state
+    setGameState(prev => {
+      if (prev !== 'flying' && newGameState === 'flying') {
+        if (flightAudio.current) {
+          flightAudio.current.muted = isMutedRef.current;
+          flightAudio.current.currentTime = 0;
+          flightAudio.current.play().catch(() => {});
+        }
+      }
+      if (prev === 'flying' && newGameState === 'crashed') {
+        if (flightAudio.current) {
+          flightAudio.current.pause();
+          flightAudio.current.currentTime = 0;
+        }
+        if (crashAudio.current) {
+          crashAudio.current.muted = isMutedRef.current;
+          crashAudio.current.play().catch(() => {});
+        }
+      }
+      return newGameState;
+    });
+
+    // Sync multiplier and timing
+    if (newGameState === 'flying') {
+      startTimeRef.current = data.startTime;
+      if (!requestRef.current) requestRef.current = requestAnimationFrame(animate);
+    } else {
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
+      }
+      if (newGameState === 'crashed') {
+        setMultiplier(data.lastFinalValue);
+        multiplierRef.current = data.lastFinalValue;
+        setLastCrashValue(data.lastFinalValue);
+      } else {
+        setMultiplier(1.0);
+        multiplierRef.current = 1.0;
+      }
+    }
+
+    if (newGameState === 'waiting') {
+      const remaining = Math.max(0, Math.ceil((data.countdownEndTime - Date.now() + serverOffsetRef.current) / 1000));
+      setCountdown(remaining);
+    }
+
+    setHistory(data.history || []);
+    const newActiveBets = data.activeBets || [];
+    const newQueuedBets = data.queuedBets || [];
+    setActiveBets(newActiveBets);
+    
+    // Auto-sync local panel states with server truth
+    if (profile) {
+      const myActiveArr = newActiveBets.filter((b: any) => b.userId === profile.uid);
+      const myQueuedArr = newQueuedBets.filter((b: any) => b.userId === profile.uid);
+
+      setPanel1(prev => {
+        const active = myActiveArr.find((b: any) => b.panel === 1);
+        const queued = myQueuedArr.find((b: any) => b.panel === 1);
+        
+        if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
+        if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
+        
+        // Only reset if the round has changed and we are in waiting state
+        if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+          return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+        }
+        return prev;
+      });
+
+      setPanel2(prev => {
+        const active = myActiveArr.find((b: any) => b.panel === 2);
+        const queued = myQueuedArr.find((b: any) => b.panel === 2);
+        
+        if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
+        if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
+        
+        if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+          return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+        }
+        return prev;
+      });
+    }
+
+    currentRoundRef.current = newRound;
+    setCrashValue(data.nextCrashValue);
+  };
   const isPlacingBet = useRef({ panel1: false, panel2: false });
+  const fallbackTimerRef = useRef<any>(null);
+
+  const startFallbackPolling = () => {
+    if (fallbackTimerRef.current) return;
+    console.log("[GAME] Starting fallback polling...");
+    fallbackTimerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/api/game/state');
+        if (res.ok) {
+          const data = await res.json();
+          handleGameData(data);
+          setIsConnected(true);
+        }
+      } catch (e) {
+        console.error("[GAME] Fallback polling failed:", e);
+        setIsConnected(false);
+      }
+    }, 2000);
+  };
 
   const fetchBetHistory = async () => {
     if (!profile) return;
     try {
-      const q = query(
-        collection(db, 'user_bets'),
-        where('userId', '==', profile.uid),
-        orderBy('timestamp', 'desc'),
-        limit(50)
-      );
-      const snap = await getDocs(q);
-      const history: any[] = [];
-      snap.forEach(d => history.push({ id: d.id, ...d.data() }));
-      setUserBetHistory(history);
+      const res = await fetch(`/api/game/my-history?userId=${profile.uid}`);
+      const data = await res.json();
+      setUserBetHistory(data.history || []);
       setIsHistoryModalOpen(true);
       setIsMenuOpen(false);
     } catch (err) {
@@ -83,122 +192,44 @@ export default function Home() {
     flightAudio.current = music;
     crashAudio.current = new Audio('https://assets.mixkit.co/active_storage/sfx/264/264-preview.mp3');
 
+    console.log("[SSE] Initiating connection...");
     const eventSource = new EventSource(`/api/game/stream?t=${Date.now()}`);
 
     eventSource.onopen = () => {
-      console.log("SSE Connection opened");
+      console.log("[SSE] Connection established successfully");
       setIsConnected(true);
     };
 
     eventSource.onmessage = (event) => {
-      if (!event.data || event.data.startsWith(':')) return; // Ignore keep-alive
-      const data = JSON.parse(event.data);
-      if (!data) return;
-      
-      setIsConnected(true);
-
-      const serverTime = data.serverTime || Date.now();
-      serverOffsetRef.current = Date.now() - serverTime;
-
-      const newGameState = data.status || 'waiting';
-      const newRound = data.currentRound || 0;
-      const roundShifted = newRound !== currentRoundRef.current;
-      
-      // Update basic state
-      setGameState(prev => {
-        if (prev !== 'flying' && newGameState === 'flying') {
-          if (flightAudio.current) {
-            flightAudio.current.muted = isMutedRef.current;
-            flightAudio.current.currentTime = 0;
-            flightAudio.current.play().catch(() => {});
-          }
-        }
-        if (prev === 'flying' && newGameState === 'crashed') {
-          if (flightAudio.current) {
-            flightAudio.current.pause();
-            flightAudio.current.currentTime = 0;
-          }
-          if (crashAudio.current) {
-            crashAudio.current.muted = isMutedRef.current;
-            crashAudio.current.play().catch(() => {});
-          }
-        }
-        return newGameState;
-      });
-
-      // Sync multiplier and timing
-      if (newGameState === 'flying') {
-        startTimeRef.current = data.startTime;
-        if (!requestRef.current) requestRef.current = requestAnimationFrame(animate);
-      } else {
-        if (requestRef.current) {
-          cancelAnimationFrame(requestRef.current);
-          requestRef.current = null;
-        }
-        if (newGameState === 'crashed') {
-          setMultiplier(data.lastFinalValue);
-          multiplierRef.current = data.lastFinalValue;
-          setLastCrashValue(data.lastFinalValue);
-        } else {
-          setMultiplier(1.0);
-          multiplierRef.current = 1.0;
-        }
+      // Clear fallback timer if SSE is working
+      if (fallbackTimerRef.current) {
+        clearInterval(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
       }
 
-      if (newGameState === 'waiting') {
-        const remaining = Math.max(0, Math.ceil((data.countdownEndTime - Date.now() + serverOffsetRef.current) / 1000));
-        setCountdown(remaining);
+      if (!event.data || event.data.startsWith(':')) {
+        // Keep-alive heartbeat received
+        setIsConnected(true);
+        return;
       }
-
-      setHistory(data.history || []);
-      const newActiveBets = data.activeBets || [];
-      const newQueuedBets = data.queuedBets || [];
-      setActiveBets(newActiveBets);
       
-      // Auto-sync local panel states with server truth
-      if (profile) {
-        const myActiveArr = newActiveBets.filter((b: any) => b.userId === profile.uid);
-        const myQueuedArr = newQueuedBets.filter((b: any) => b.userId === profile.uid);
-
-        setPanel1(prev => {
-          const active = myActiveArr.find((b: any) => b.panel === 1);
-          const queued = myQueuedArr.find((b: any) => b.panel === 1);
-          
-          if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
-          if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
-          
-          // Only reset if the round has changed and we are in waiting state
-          if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
-            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
-          }
-          return prev;
-        });
-
-        setPanel2(prev => {
-          const active = myActiveArr.find((b: any) => b.panel === 2);
-          const queued = myQueuedArr.find((b: any) => b.panel === 2);
-          
-          if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
-          if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
-          
-          if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
-            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
-          }
-          return prev;
-        });
+      try {
+        const data = JSON.parse(event.data);
+        handleGameData(data);
+        setIsConnected(true);
+      } catch (e) {
+        console.error("[SSE] Parse error:", e);
       }
-
-      currentRoundRef.current = newRound;
-      setCrashValue(data.nextCrashValue);
-      setIsConnected(true);
     };
 
     eventSource.onerror = (e) => {
-      console.error("SSE Connection failed:", e);
+      console.error("[SSE] Connection failed:", e);
       setIsConnected(false);
       eventSource.close();
-      // Auto-retry in 1s
-      setTimeout(() => setRetryKey(prev => prev + 1), 1000);
+      // Start fallback if SSE fails
+      startFallbackPolling();
+      // Auto-retry SSE in 5s
+      setTimeout(() => setRetryKey(prev => prev + 1), 5000);
     };
 
     return () => {
@@ -265,8 +296,17 @@ export default function Home() {
   useEffect(() => {
     if (gameState === 'crashed') {
       handleLocalCrashCleanup(lastCrashValue);
+      // Automatically refresh history to show last bet via Optimized API
+      if (profile) {
+        fetch(`/api/game/my-history?userId=${profile.uid}`)
+          .then(res => res.json())
+          .then(data => {
+            setUserBetHistory(data.history || []);
+          })
+          .catch(err => console.error("Error auto-fetching bet history:", err));
+      }
     }
-  }, [gameState, lastCrashValue]);
+  }, [gameState, lastCrashValue, profile]);
 
   const handleLocalCrashCleanup = async (serverFinalValue?: number) => {
     if (requestRef.current) cancelAnimationFrame(requestRef.current);
