@@ -3,10 +3,8 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeApp as initializeClientApp } from "firebase/app";
-import { getFirestore as getFirestoreClient, doc as docClient, onSnapshot as onSnapshotClient, updateDoc as updateDocClient, increment as incrementClient, serverTimestamp as serverTimestampClient, getDoc as getDocClient, setDoc as setDocClient, Timestamp as TimestampClient, collection as collectionClient, getDocs as getDocsClient, deleteField, query as queryClient, orderBy as orderByClient, limit as limitClient } from "firebase/firestore";
+import { getFirestore as getFirestoreClient, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
 import { getAuth as getAuthClient, signInAnonymously } from "firebase/auth";
-import { initializeApp as initializeAdminApp, getApps as getAdminApps, getApp as getAdminApp } from 'firebase-admin/app';
-import { getFirestore as getFirestoreAdmin, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import fs from "fs";
 
 // ESM __dirname
@@ -17,75 +15,59 @@ const __dirname = path.dirname(__filename);
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
-// Initialize Firebase Client (We will use this for the server-side loop to avoid IAM issues)
+// Initialize Firebase Client (We will use this with an auth session for guaranteed access)
 const firebaseApp = initializeClientApp(firebaseConfig);
 const dbClient = getFirestoreClient(firebaseApp, firebaseConfig.firestoreDatabaseId || undefined);
 const authClient = getAuthClient(firebaseApp);
-
-// Initialize Firebase Admin (Keep for other potential admin tasks, but loop will use client)
-const adminApp = getAdminApps().length === 0 
-  ? initializeAdminApp({ projectId: firebaseConfig.projectId })
-  : getAdminApp();
-
-const dbAdmin = getFirestoreAdmin(adminApp, firebaseConfig.firestoreDatabaseId || undefined);
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  console.log("Starting server with Client-SDK-based Game Loop...");
+  console.log(`Starting server with Client-SDK + Auth (DB: ${firebaseConfig.firestoreDatabaseId || "(default)"})`);
+
+  // Sign in anonymously to establish a session that Security Rules can trust
+  try {
+    const cred = await signInAnonymously(authClient);
+    console.log(`[SERVER] Authenticated as Anonymous User: ${cred.user.uid}`);
+  } catch (e) {
+    console.error("[SERVER] Failed to sign in anonymously:", e);
+  }
 
   // Force Initialize Config on Startup
   const forceInit = async () => {
     try {
+      console.log("[SERVER] Testing connection to Firestore...");
       const configRef = docClient(dbClient, 'settings', 'config');
       const snap = await getDocClient(configRef);
       if (!snap.exists()) {
         console.log("FORCE START: Config document missing. Creating initial state...");
         await setDocClient(configRef, {
-          gameState: 'waiting',
+          status: 'waiting',
           nextCrashValue: 1.5,
           currentRound: 1,
-          countdownEndTime: TimestampClient.fromDate(new Date(Date.now() + 5000))
+          countdownEndTime: Date.now() + 5000
         });
       } else {
-        console.log("Config document found. Current state:", snap.data()?.gameState);
-        // If stuck in crashed or flying without timestamp, force reset
         const data = snap.data();
-        if ((data?.gameState === 'crashed' && !data?.nextTransitionTime) || (data?.gameState === 'flying' && !data?.startTime)) {
+        console.log("Config document found. Current state:", data?.status);
+        // If stuck in crashed or flying without timestamp, force reset
+        if ((data?.status === 'crashed' && !data?.nextTransitionTime) || (data?.status === 'flying' && !data?.startTime)) {
           console.log("Detected stuck state on startup. Resetting to waiting...");
           await updateDocClient(configRef, {
-            gameState: 'waiting',
-            countdownEndTime: TimestampClient.fromDate(new Date(Date.now() + 5000)),
+            status: 'waiting',
+            countdownEndTime: Date.now() + 5000,
             startTime: null,
             nextTransitionTime: null
           });
         }
       }
+      console.log("[SERVER] Firestore connection successful.");
     } catch (e) {
       console.error("Critical Startup Init Error:", e);
     }
   };
-  forceInit();
-
-  let settingsRef: any = null;
-
-  // Initial Auth & Registration
-  try {
-    const userCred = await signInAnonymously(authClient);
-    const serverUid = userCred.user.uid;
-    console.log(`[SERVER] Signed in anonymously. UID: ${serverUid}`);
-    
-    // Register this UID in settings/config so rules can trust it
-    await updateDocClient(docClient(dbClient, 'settings', 'config'), { 
-      serverUid: serverUid 
-    });
-    console.log("[SERVER] Registered UID in settings/config for rule bypass.");
-  } catch (e) {
-    console.error("[SERVER] Auth/Registration failed:", e);
-  }
-
-  app.use(express.json());
+  await forceInit();
 
   // --- SERVER AUTHORITATIVE GAME STATE (IN-MEMORY) ---
   // This solves the Firestore "RESOURCE_EXHAUSTED" error by not writing state every round.
@@ -105,6 +87,24 @@ async function startServer() {
     queuedBets: [] as any[]
   };
 
+  // Load initial settings from persistence
+  try {
+    const configRef = docClient(dbClient, 'settings', 'config');
+    const snap = await getDocClient(configRef);
+    if (snap.exists()) {
+      const data = snap.data()!;
+      gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
+      gameStateMemory.currentRound = data.currentRound || 1;
+      gameStateMemory.isManualMode = !!data.isManualMode;
+      gameStateMemory.status = data.status || 'waiting';
+    }
+    // Load history
+    const histSnap = await getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(15)));
+    gameStateMemory.history = histSnap.docs.map(d => d.data());
+  } catch (e) { console.error("Init Error:", e); }
+
+  app.use(express.json());
+
   // SSE Clients
   let clients: any[] = [];
   let fakeUserIdCounter = 251500;
@@ -117,36 +117,24 @@ async function startServer() {
     clients.forEach(client => client.res.write(`data: ${data}\n\n`));
   };
 
-  // Load initial state from Firebase once on boot
-  const initFromFirestore = async () => {
-    try {
-      const configRef = docClient(dbClient, 'settings', 'config');
-      const snap = await getDocClient(configRef);
-      if (snap.exists()) {
-        const data = snap.data();
-        gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
-        gameStateMemory.currentRound = data.currentRound || 1;
-        gameStateMemory.isManualMode = !!data.isManualMode;
-      }
-      // Load history
-      const histSnap = await getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(10)));
-      gameStateMemory.history = histSnap.docs.map(d => d.data());
-    } catch (e) { console.error("Init Error:", e); }
-  };
-  initFromFirestore();
-
   // SSE Endpoint
   app.get("/api/game/stream", (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
     const clientId = Date.now();
     const newClient = { id: clientId, res };
     clients.push(newClient);
 
+    const keepAlive = setInterval(() => {
+      res.write(': keep-alive\n\n');
+    }, 15000);
+
     req.on('close', () => {
+      clearInterval(keepAlive);
       clients = clients.filter(c => c.id !== clientId);
     });
 
@@ -193,7 +181,9 @@ async function startServer() {
         setDocClient(docClient(dbClient, 'history', roundId), {
           ...histItem, 
           timestamp: serverTimestampClient()
-        }).catch(e => console.error("History Save Error:", e));
+        }).catch(e => {
+          console.error("HISTORY SAVE ERROR DETAILS:", e);
+        });
         
         // Calculate next crash value
         let nextValue = 1.10;
@@ -238,12 +228,12 @@ async function startServer() {
   const getLedgerUser = async (userId: string) => {
     if (userLedger.has(userId)) return userLedger.get(userId)!;
     
-    // Fetch from Firestore if not in ledger
+    // Fetch from Firestore
     const userRef = docClient(dbClient, 'users', userId);
     const snap = await getDocClient(userRef);
     if (!snap.exists()) throw new Error("User record not found");
     
-    const data = snap.data();
+    const data = snap.data()!;
     const entry = { balance: data.balance || 0, referralBalance: data.referralBalance || 0, dirty: false };
     userLedger.set(userId, entry);
     return entry;
@@ -325,7 +315,7 @@ async function startServer() {
     }
 
     const bet = gameStateMemory.activeBets[betIndex];
-    if (multiplier > gameStateMemory.multiplier + 0.1) {
+    if (multiplier > gameStateMemory.multiplier + 0.5) {
       return res.status(400).json({ error: "Invalid multiplier / Timing error" });
     }
 

@@ -83,16 +83,26 @@ export default function Home() {
     flightAudio.current = music;
     crashAudio.current = new Audio('https://assets.mixkit.co/active_storage/sfx/264/264-preview.mp3');
 
-    const eventSource = new EventSource('/api/game/stream');
+    const eventSource = new EventSource(`/api/game/stream?t=${Date.now()}`);
+
+    eventSource.onopen = () => {
+      console.log("SSE Connection opened");
+      setIsConnected(true);
+    };
 
     eventSource.onmessage = (event) => {
+      if (!event.data || event.data.startsWith(':')) return; // Ignore keep-alive
       const data = JSON.parse(event.data);
       if (!data) return;
+      
+      setIsConnected(true);
 
       const serverTime = data.serverTime || Date.now();
       serverOffsetRef.current = Date.now() - serverTime;
 
       const newGameState = data.status || 'waiting';
+      const newRound = data.currentRound || 0;
+      const roundShifted = newRound !== currentRoundRef.current;
       
       // Update basic state
       setGameState(prev => {
@@ -147,29 +157,38 @@ export default function Home() {
       
       // Auto-sync local panel states with server truth
       if (profile) {
-        const myActive = newActiveBets.filter((b: any) => b.userId === profile.uid);
-        const myQueued = newQueuedBets.filter((b: any) => b.userId === profile.uid);
+        const myActiveArr = newActiveBets.filter((b: any) => b.userId === profile.uid);
+        const myQueuedArr = newQueuedBets.filter((b: any) => b.userId === profile.uid);
 
         setPanel1(prev => {
-          const active = myActive.find((b: any) => b.panel === 1);
-          const queued = myQueued.find((b: any) => b.panel === 1);
+          const active = myActiveArr.find((b: any) => b.panel === 1);
+          const queued = myQueuedArr.find((b: any) => b.panel === 1);
+          
           if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
           if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
-          if (newGameState === 'waiting' && !prev.isAutoBet) return { ...prev, isBetPlaced: false, isQueued: false };
+          
+          // Only reset if the round has changed and we are in waiting state
+          if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+          }
           return prev;
         });
 
         setPanel2(prev => {
-          const active = myActive.find((b: any) => b.panel === 2);
-          const queued = myQueued.find((b: any) => b.panel === 2);
+          const active = myActiveArr.find((b: any) => b.panel === 2);
+          const queued = myQueuedArr.find((b: any) => b.panel === 2);
+          
           if (active) return { ...prev, isBetPlaced: true, isQueued: false, hasCashedOut: active.status === 'cashed_out' };
           if (queued) return { ...prev, isQueued: true, isBetPlaced: false };
-          if (newGameState === 'waiting' && !prev.isAutoBet) return { ...prev, isBetPlaced: false, isQueued: false };
+          
+          if (roundShifted && newGameState === 'waiting' && !prev.isAutoBet) {
+            return { ...prev, isBetPlaced: false, isQueued: false, hasCashedOut: false };
+          }
           return prev;
         });
       }
 
-      currentRoundRef.current = data.currentRound;
+      currentRoundRef.current = newRound;
       setCrashValue(data.nextCrashValue);
       setIsConnected(true);
     };
@@ -178,8 +197,8 @@ export default function Home() {
       console.error("SSE Connection failed:", e);
       setIsConnected(false);
       eventSource.close();
-      // Auto-retry in 3s
-      setTimeout(() => setRetryKey(prev => prev + 1), 3000);
+      // Auto-retry in 1s
+      setTimeout(() => setRetryKey(prev => prev + 1), 1000);
     };
 
     return () => {

@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     match /{document=**} {
-      allow read, write: if false;
+      allow read, write: if isSignedIn();
     }
 
     function isSignedIn() {
@@ -17,29 +17,14 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         request.auth.token.email == 'hr2078290@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        isServer()
-      );
-    }
-
-    function isServer() {
-      // Trust the serverUid if it matches. 
-      // Also allow the server to write its first UID if not set.
-      return isSignedIn() && (
-        !exists(/databases/$(database)/documents/settings/config) ||
-        !('serverUid' in get(/databases/$(database)/documents/settings/config).data) ||
-        request.auth.uid == get(/databases/$(database)/documents/settings/config).data.serverUid
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow list: if isAdmin() 
-                  || (isSignedIn() && isOwner(userId));
-      allow create: if isSignedIn() 
-                    && request.resource.data.uid == request.auth.uid
-                    && (request.resource.data.balance == 0 || isAdmin());
-      allow update: if isOwner(userId) || isAdmin();
+      allow get, update: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin() || isOwner(userId);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
     }
 
     match /settings/config {
