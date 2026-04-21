@@ -2,16 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { useAuth } from '../lib/AuthContext';
 import { doc, onSnapshot, addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { Wallet, QrCode, ClipboardCheck, AlertCircle, Camera } from 'lucide-react';
+import { Wallet, QrCode, ClipboardCheck, AlertCircle, Camera, Check as CheckIcon, CreditCard, ChevronRight, Zap } from 'lucide-react';
 import { GameSettings } from '../types';
 
 export default function Deposit() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [settings, setSettings] = useState<GameSettings>({ nextCrashValue: 1.5, currentUpiId: '', currentQrCode: '' });
   const [amount, setAmount] = useState('');
   const [txnId, setTxnId] = useState('');
   const [proofUrl, setProofUrl] = useState('');
   const [success, setSuccess] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<'razorpay' | 'manual'>('razorpay');
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    // Load Razorpay Script
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    document.body.appendChild(script);
+  }, []);
 
   useEffect(() => {
     return onSnapshot(doc(db, 'settings', 'config'), (snap) => {
@@ -19,22 +29,72 @@ export default function Deposit() {
     });
   }, []);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 1024 * 1024) { // 1MB limit check
-        alert('File size too large. Please use an image under 1MB.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProofUrl(reader.result as string);
+  const handleRazorpayPayment = async () => {
+    if (!user || !amount || parseFloat(amount) < 100) {
+      alert("Minimum deposit amount is ₹100");
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      // 1. Create order on backend
+      const res = await fetch("/api/payment/razorpay/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: parseFloat(amount), userId: user.uid })
+      });
+
+      const orderData = await res.json();
+      if (!res.ok) throw new Error(orderData.error || "Failed to create order");
+
+      // 2. Open Razorpay Checkout
+      const options = {
+        key: orderData.key,
+        amount: Math.round(parseFloat(amount) * 100),
+        currency: "INR",
+        name: "Avited Club",
+        description: `Deposit for ${user.email}`,
+        order_id: orderData.orderId,
+        handler: async (response: any) => {
+          // 3. Verify payment on backend
+          const verifyRes = await fetch("/api/payment/razorpay/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...response,
+              userId: user.uid,
+              amount: amount
+            })
+          });
+
+          if (verifyRes.ok) {
+            setSuccess(true);
+          } else {
+            alert("Payment verification failed. Please contact support.");
+          }
+        },
+        prefill: {
+          email: user.email || "",
+          contact: profile?.phone || ""
+        },
+        theme: {
+          color: "#F27D26"
+        },
+        modal: {
+          onDismiss: () => setIsProcessing(false)
+        }
       };
-      reader.readAsDataURL(file);
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    } catch (e: any) {
+      alert(e.message || "Payment initiation failed");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     try {
@@ -56,107 +116,185 @@ export default function Deposit() {
     }
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 1024 * 1024) { // 1MB limit check
+        alert('File size too large. Please use an image under 1MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setProofUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4">
+    <div className="max-w-4xl mx-auto py-10 px-4">
       <div className="text-center mb-10">
-        <h1 className="text-3xl font-black italic uppercase italic tracking-tighter">Add <span className="text-green-500">Credits</span></h1>
-        <p className="text-white/40 text-sm mt-1 uppercase tracking-widest font-medium">Recharge your wallet via UPI</p>
+        <h1 className="text-3xl font-black italic uppercase italic tracking-tighter text-white">Add <span className="text-green-500">Credits</span></h1>
+        <p className="text-white/40 text-sm mt-1 uppercase tracking-widest font-medium">Recharge your wallet instantly</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* UPI Details */}
-        <div className="space-y-6">
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 text-center space-y-4">
-             <div className="text-[10px] font-bold uppercase tracking-widest text-[#F27D26]">Official Payment QR</div>
-             <div className="aspect-square bg-white rounded-xl overflow-hidden flex items-center justify-center border-4 border-white/5">
-                {settings.currentQrCode ? (
-                  <img src={settings.currentQrCode} alt="UPI QR" referrerPolicy="no-referrer" className="w-full h-full object-contain" />
-                ) : (
-                  <QrCode className="w-20 h-20 text-black/10" />
-                )}
-             </div>
-             <div className="pt-4 space-y-2">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-white/40">Receiver UPI ID</div>
-                <div className="flex items-center justify-center gap-2 group">
-                   <div className="text-xl font-mono font-bold text-white selection:bg-green-500">{settings.currentUpiId || 'admin@upi'}</div>
-                   <button onClick={() => {navigator.clipboard.writeText(settings.currentUpiId || ''); alert('Copied!')}} className="p-2 hover:bg-white/5 rounded-lg text-white/40 hover:text-white transition-colors">
-                     <ClipboardCheck className="w-4 h-4" />
-                   </button>
-                </div>
-             </div>
-          </div>
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 flex gap-3">
-             <AlertCircle className="w-5 h-5 text-blue-400 shrink-0" />
-             <p className="text-[11px] text-blue-400">Please complete the payment on your UPI app first, then enter the Transaction reference ID below.</p>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+        {/* Payment Modes Selector */}
+        <div className="md:col-span-4 space-y-4">
+           <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40 px-2">Select Payment Method</h3>
+           <button 
+             onClick={() => setPaymentMode('razorpay')}
+             className={`w-full p-4 rounded-2xl border transition-all flex items-center gap-4 ${paymentMode === 'razorpay' ? 'bg-green-500/10 border-green-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+           >
+              <div className={`p-2 rounded-lg ${paymentMode === 'razorpay' ? 'bg-green-500 text-black' : 'bg-white/10 text-white/40'}`}>
+                <Zap className="w-5 h-5" />
+              </div>
+              <div className="text-left">
+                <div className="text-xs font-black uppercase text-white">Instant Pay</div>
+                <div className="text-[10px] font-bold text-white/40">Automated • UPI / Card</div>
+              </div>
+              {paymentMode === 'razorpay' && <Check className="w-4 h-4 text-green-500 ml-auto" />}
+           </button>
+
+           <button 
+             onClick={() => setPaymentMode('manual')}
+             className={`w-full p-4 rounded-2xl border transition-all flex items-center gap-4 ${paymentMode === 'manual' ? 'bg-[#F27D26]/10 border-[#F27D26]/50' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+           >
+              <div className={`p-2 rounded-lg ${paymentMode === 'manual' ? 'bg-[#F27D26] text-black' : 'bg-white/10 text-white/40'}`}>
+                <QrCode className="w-5 h-5" />
+              </div>
+              <div className="text-left">
+                <div className="text-xs font-black uppercase text-white">Manual UPI</div>
+                <div className="text-[10px] font-bold text-white/40">QR Scan • Manual Verification</div>
+              </div>
+              {paymentMode === 'manual' && <Check className="w-4 h-4 text-[#F27D26] ml-auto" />}
+           </button>
         </div>
 
-        {/* Form */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-          {success ? (
-            <div className="h-full flex flex-col items-center justify-center text-center py-10">
-              <div className="bg-green-500 w-16 h-16 rounded-full flex items-center justify-center mb-4">
-                <Check className="w-8 h-8 text-black" />
-              </div>
-              <h3 className="text-xl font-bold">Request Submitted</h3>
-              <p className="text-white/40 text-sm mt-2 font-medium uppercase tracking-widest">Admin will verify and add balance within 15-30 mins.</p>
-              <button onClick={() => setSuccess(false)} className="mt-8 text-green-500 underline font-bold text-sm">Submit another</button>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-               <div className="space-y-2">
-                 <label className="text-[10px] font-bold uppercase text-white/40 tracking-widest">Deposit Amount (INR)</label>
-                 <input 
-                   type="number" 
-                   required
-                   value={amount}
-                   onChange={(e) => setAmount(e.target.value)}
-                   className="w-full bg-white/5 border border-white/10 rounded-xl p-4 outline-none font-mono text-lg focus:border-green-500/50"
-                   placeholder="₹ 500"
-                 />
-               </div>
-               <div className="space-y-2">
-                 <label className="text-[10px] font-bold uppercase text-white/40 tracking-widest">UPI Transaction ID (Ref No)</label>
-                 <input 
-                   type="text" 
-                   required
-                   value={txnId}
-                   onChange={(e) => setTxnId(e.target.value)}
-                   className="w-full bg-white/5 border border-white/10 rounded-xl p-4 outline-none font-mono text-lg focus:border-green-500/50"
-                   placeholder="1234567890..."
-                 />
-               </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase text-white/40 tracking-widest">Upload Payment Proof (Screenshot)</label>
-                  <label className="flex flex-col items-center justify-center w-full min-h-[140px] bg-white/5 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-white/10 transition-all overflow-hidden group">
-                     {proofUrl ? (
-                       <div className="relative w-full h-full">
-                         <img src={proofUrl} className="w-full h-full object-contain max-h-[200px]" referrerPolicy="no-referrer" />
-                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                            <span className="text-[10px] font-bold uppercase text-white border border-white/20 px-3 py-1 rounded-full">Change Image</span>
-                         </div>
-                       </div>
-                     ) : (
-                       <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                         <Camera className="w-10 h-10 text-white/20 mb-2" />
-                         <p className="text-[10px] text-white/40 font-bold uppercase tracking-widest">Select Screenshot</p>
-                       </div>
-                     )}
-                     <input type="file" className="hidden" accept="image/*" required={!proofUrl} onChange={handleImageUpload} />
-                  </label>
-                  <input 
-                    type="text" 
-                    value={proofUrl}
-                    onChange={(e) => setProofUrl(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 outline-none font-mono text-[10px] text-white/20"
-                    placeholder="Or paste screenshot URL here"
-                  />
+        {/* Action Panel */}
+        <div className="md:col-span-8 flex flex-col gap-6">
+          <div className="bg-white/5 border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+            {success ? (
+              <div className="text-center py-10">
+                <div className="bg-green-500 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-green-500/30">
+                  <Check className="w-10 h-10 text-black" />
                 </div>
-               <button type="submit" className="w-full bg-green-500 hover:bg-green-400 text-black font-black uppercase tracking-widest py-4 rounded-xl shadow-lg shadow-green-500/20 transition-all mt-6 active:scale-95">
-                 Verify Deposit
-               </button>
-            </form>
-          )}
+                <h3 className="text-2xl font-black uppercase italic tracking-tighter text-white">Credits Added!</h3>
+                <p className="text-white/40 text-sm mt-3 font-medium uppercase tracking-widest max-w-xs mx-auto">
+                  {paymentMode === 'razorpay' 
+                    ? "Successfully recharged! Your balance has been updated automatically." 
+                    : "Request submitted! Admin will verify and add balance within 15 mins."}
+                </p>
+                <button onClick={() => setSuccess(false)} className="mt-10 text-green-500 font-bold uppercase text-xs tracking-[0.2em] border-b border-green-500/50 pb-1">Deposit More</button>
+              </div>
+            ) : paymentMode === 'razorpay' ? (
+              <div className="space-y-6">
+                 <div className="bg-gradient-to-br from-green-500/10 to-transparent p-5 rounded-2xl border border-green-500/20">
+                    <div className="text-[10px] font-bold uppercase text-green-500 tracking-widest mb-4">Enter Recharge Amount</div>
+                    <div className="relative">
+                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-white/20 italic">₹</span>
+                       <input 
+                         type="number"
+                         value={amount}
+                         onChange={(e) => setAmount(e.target.value)}
+                         className="w-full bg-black/40 border border-white/10 rounded-xl py-5 pl-12 pr-4 text-3xl font-mono font-black text-white outline-none focus:border-green-500 transition-all"
+                         placeholder="500"
+                       />
+                    </div>
+                    <div className="flex gap-2 mt-4">
+                       {[100, 500, 1000, 5000].map(val => (
+                         <button 
+                           key={val}
+                           onClick={() => setAmount(val.toString())}
+                           className="flex-1 bg-white/5 border border-white/5 hover:bg-white/10 rounded-lg py-2 text-[10px] font-bold text-white/60 transition-all"
+                         >
+                           +₹{val}
+                         </button>
+                       ))}
+                    </div>
+                 </div>
+
+                 <div className="space-y-4">
+                    <div className="flex items-start gap-3 p-4 rounded-xl bg-white/5 border border-white/5">
+                       <CreditCard className="w-5 h-5 text-green-500 shrink-0" />
+                       <div>
+                          <div className="text-[10px] font-black uppercase text-white tracking-widest">Supported Modes</div>
+                          <div className="text-[10px] text-white/40 mt-1">Google Pay, PhonePe, Paytm, Cards, and Netbanking</div>
+                       </div>
+                    </div>
+                    
+                    <button 
+                      disabled={isProcessing || !amount || parseFloat(amount) < 100}
+                      onClick={handleRazorpayPayment}
+                      className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-30 disabled:grayscale text-black font-black uppercase tracking-widest py-5 rounded-2xl shadow-xl shadow-green-500/20 transition-all flex items-center justify-center gap-3 active:scale-95 group"
+                    >
+                      {isProcessing ? 'Connecting...' : <><Zap className="w-5 h-5 fill-current" /> Pay Now <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>}
+                    </button>
+                 </div>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                       <div className="bg-white p-3 rounded-2xl aspect-square flex items-center justify-center shadow-xl border-4 border-white/5">
+                          {settings.currentQrCode ? (
+                            <img src={settings.currentQrCode} alt="UPI QR" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                          ) : <QrCode className="w-20 h-20 text-black/10" />}
+                       </div>
+                       <div className="text-center">
+                          <p className="text-[9px] font-bold text-white/40 uppercase tracking-widest mb-1">UPI ID</p>
+                          <div className="flex items-center justify-center gap-2">
+                             <span className="text-sm font-mono font-bold text-[#F27D26]">{settings.currentUpiId || 'admin@upi'}</span>
+                             <button onClick={() => {navigator.clipboard.writeText(settings.currentUpiId || ''); alert('Copied!')}} className="p-1.5 hover:bg-white/5 rounded-lg">
+                               <ClipboardCheck className="w-3 h-3 text-white/40" />
+                             </button>
+                          </div>
+                       </div>
+                    </div>
+
+                    <form onSubmit={handleManualSubmit} className="space-y-4">
+                       <div className="space-y-1.5">
+                          <label className="text-[9px] font-bold uppercase text-white/40 tracking-widest ml-1">Amount</label>
+                          <input 
+                            type="number" required placeholder="₹ 100"
+                            value={amount} onChange={(e) => setAmount(e.target.value)}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3.5 text-sm font-bold font-mono outline-none focus:border-[#F27D26] text-white"
+                          />
+                       </div>
+                       <div className="space-y-1.5">
+                          <label className="text-[9px] font-bold uppercase text-white/40 tracking-widest ml-1">Transaction ID (UTR)</label>
+                          <input 
+                            type="text" required placeholder="12-digit number"
+                            value={txnId} onChange={(e) => setTxnId(e.target.value)}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3.5 text-sm font-bold font-mono outline-none focus:border-[#F27D26] text-white"
+                          />
+                       </div>
+                       <div className="space-y-1.5">
+                          <label className="text-[9px] font-bold uppercase text-white/40 tracking-widest ml-1">Payment Proof</label>
+                          <label className="flex flex-col items-center justify-center w-full min-h-[100px] border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-white/5 transition-all overflow-hidden group relative">
+                             {proofUrl ? (
+                               <img src={proofUrl} className="w-full h-full object-contain max-h-[120px]" referrerPolicy="no-referrer" />
+                             ) : (
+                               <div className="text-center">
+                                  <Camera className="w-6 h-6 text-white/20 mx-auto mb-1" />
+                                  <span className="text-[8px] font-bold text-white/20 uppercase tracking-widest">Select Screenshot</span>
+                               </div>
+                             )}
+                             <input type="file" className="hidden" accept="image/*" required={!proofUrl} onChange={handleImageUpload} />
+                          </label>
+                       </div>
+                       <button type="submit" className="w-full bg-[#F27D26] hover:bg-[#ff8c3a] text-black font-black uppercase tracking-widest py-4 rounded-xl shadow-lg shadow-[#F27D26]/20 transition-all mt-4 active:scale-95 text-xs">
+                         Verify Manually
+                       </button>
+                    </form>
+                 </div>
+                 <div className="flex items-start gap-3 p-4 rounded-xl bg-blue-500/5 border border-blue-500/10">
+                    <AlertCircle className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                    <p className="text-[10px] text-blue-400 font-medium leading-relaxed italic">Important: Manual deposits take 15-30 minutes for verification. For instant credits, please use the Automated "Instant Pay" mode.</p>
+                 </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

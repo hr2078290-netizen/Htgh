@@ -3,11 +3,24 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeApp as initializeClientApp } from "firebase/app";
-import { initializeFirestore, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
+import { initializeFirestore, doc as docClient, getDoc as getDocClient, setDoc as setDocClient, updateDoc as updateDocClient, addDoc as addDocClient, collection as collectionClient, query as queryClient, orderBy as orderByClient, limit as limitClient, getDocs as getDocsClient, Timestamp as TimestampClient, serverTimestamp as serverTimestampClient } from "firebase/firestore";
 import { getAuth as getAuthClient, signInAnonymously } from "firebase/auth";
 import fs from "fs";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import Razorpay from "razorpay";
+
+// Lazy initialize Razorpay
+let razorpayInstance: Razorpay | null = null;
+const getRazorpay = () => {
+  if (!razorpayInstance && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+    razorpayInstance = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
+    });
+  }
+  return razorpayInstance;
+};
 
 // ESM __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -498,6 +511,75 @@ async function startServer() {
     (gameStateMemory as any)[field] = value;
     broadcastState();
     res.json({ success: true });
+  });
+
+  // --- RAZORPAY INTEGRATION ---
+  app.post("/api/payment/razorpay/create-order", async (req, res) => {
+    const { amount, userId } = req.body;
+    const rzp = getRazorpay();
+    
+    if (!rzp) {
+      return res.status(500).json({ error: "Razorpay is not configured. Please add Key ID and Secret." });
+    }
+
+    try {
+      const options = {
+        amount: Math.round(amount * 100), // amount in the smallest currency unit (paise)
+        currency: "INR",
+        receipt: `receipt_${Date.now()}_${userId.substring(0, 5)}`,
+        notes: {
+          userId
+        }
+      };
+
+      const order = await rzp.orders.create(options);
+      res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
+    } catch (e: any) {
+      console.error("[PAYMENT] Order creation failed:", e.message || e);
+      res.status(500).json({ error: "Failed to create payment order" });
+    }
+  });
+
+  app.post("/api/payment/razorpay/verify", async (req, res) => {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, userId, amount } = req.body;
+    const rzp = getRazorpay();
+    
+    if (!rzp) return res.status(500).json({ error: "Razorpay not configured" });
+
+    // Verify signature
+    const crypto = await import("crypto");
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET!);
+    hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+    const generated_signature = hmac.digest('hex');
+
+    if (generated_signature !== razorpay_signature) {
+      console.error("[PAYMENT] Invalid signature from user", userId);
+      return res.status(400).json({ error: "Invalid payment signature" });
+    }
+
+    try {
+      console.log(`[PAYMENT] Payment verified for ${userId}: ₹${amount}`);
+      
+      // Update balance in ledger
+      const user = await getLedgerUser(userId);
+      user.balance += parseFloat(amount);
+      user.dirty = true;
+
+      // Add to deposits collection (Non-blocking)
+      addDocClient(collectionClient(dbClient, 'deposits'), {
+        userId,
+        amount: parseFloat(amount),
+        transactionId: razorpay_payment_id,
+        status: 'completed',
+        method: 'razorpay',
+        timestamp: serverTimestampClient()
+      }).catch(e => console.error("[PAYMENT] Failed to log deposit:", e.message));
+
+      res.json({ success: true, newBalance: user.balance });
+    } catch (e: any) {
+      console.error("[PAYMENT] Verification handling failed:", e.message);
+      res.status(500).json({ error: "Failed to process verified payment" });
+    }
   });
 
   // API routes
