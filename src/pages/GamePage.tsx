@@ -145,6 +145,17 @@ export default function Home() {
     currentRoundRef.current = newRound;
     setCrashValue(data.nextCrashValue);
   };
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && gameState === 'flying') {
+        if (!requestRef.current) requestRef.current = requestAnimationFrame(animate);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [gameState]);
+
   const isPlacingBet = useRef({ panel1: false, panel2: false });
   const fallbackTimerRef = useRef<any>(null);
 
@@ -153,7 +164,7 @@ export default function Home() {
     console.log("[GAME] Starting fallback polling...");
     fallbackTimerRef.current = setInterval(async () => {
       try {
-        const res = await fetch('/api/game/state');
+        const res = await fetch(`/api/game/state?t=${Date.now()}`); // Added cache busting for custom domains
         if (res.ok) {
           const data = await res.json();
           handleGameData(data);
@@ -163,7 +174,7 @@ export default function Home() {
         console.error("[GAME] Fallback polling failed:", e);
         setIsConnected(false);
       }
-    }, 2000);
+    }, 1000); // Increased polling frequency to 1s for better responsiveness
   };
 
   const fetchBetHistory = async () => {
@@ -284,6 +295,15 @@ export default function Home() {
     }
     requestRef.current = requestAnimationFrame(animate);
   };
+
+  useEffect(() => {
+    if (gameState === 'flying') {
+      requestRef.current = requestAnimationFrame(animate);
+    } else {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      requestRef.current = undefined;
+    }
+  }, [gameState]);
 
   useEffect(() => {
     panel1Ref.current = panel1;
@@ -430,19 +450,19 @@ export default function Home() {
         })
       });
 
+      const resData = await response.json();
       if (!response.ok) {
-        const resData = await response.json();
         alert(resData.error || 'Cancellation failed');
         return;
       }
 
-      const resData = await response.json();
       if (resData.newBalance !== undefined) {
         setOverriddenBalance(resData.newBalance);
       }
 
-      if (panelIdx === 1) setPanel1(prev => ({ ...prev, isBetPlaced: false }));
-      else setPanel2(prev => ({ ...prev, isBetPlaced: false }));
+      const resetState = { isBetPlaced: false, isQueued: false, hasCashedOut: false };
+      if (panelIdx === 1) setPanel1(prev => ({ ...prev, ...resetState }));
+      else setPanel2(prev => ({ ...prev, ...resetState }));
     } catch (e) {
       console.error(e);
     }
@@ -881,7 +901,7 @@ export default function Home() {
         <div className="flex flex-1 items-center gap-2 sm:gap-4 min-w-0">
            <div className="flex gap-1 sm:gap-2 overflow-x-auto pb-0.5 scrollbar-hide no-scrollbar flex-1">
              {history.slice(0, 15).map((h, i) => (
-               <div key={h.timestamp?.seconds || i} className={`px-2 py-0.5 sm:px-3 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-black font-mono border whitespace-nowrap transition-all hover:scale-105 cursor-pointer ${h.value >= 10 ? 'bg-pink-500/10 text-pink-500 border-pink-500/20' : h.value >= 2 ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
+               <div key={`${h.timestamp?.seconds || 'h'}_${i}`} className={`px-2 py-0.5 sm:px-3 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-black font-mono border whitespace-nowrap transition-all hover:scale-105 cursor-pointer ${h.value >= 10 ? 'bg-pink-500/10 text-pink-500 border-pink-500/20' : h.value >= 2 ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
                  {h.value.toFixed(2)}x
                </div>
              ))}

@@ -228,14 +228,8 @@ async function startServer() {
         }
         gameStateMemory.nextCrashValue = nextValue;
 
-        // Persist round sync and upcoming crash value (Important for reboot stability)
-        updateDocClient(docClient(dbClient, 'settings', 'config'), { 
-          currentRound: gameStateMemory.currentRound,
-          lastFinalValue: gameStateMemory.lastFinalValue,
-          nextCrashValue: gameStateMemory.nextCrashValue
-        }).catch(() => {});
-
-        // Broadcast the transition
+        // Sync memory with persisted state every few rounds to save quota
+        // Only broadcast, persistence is handled by a separate throttled sync
         broadcastState();
       }
     }
@@ -273,32 +267,45 @@ async function startServer() {
     return entry;
   };
 
-  // Sync Ledger to Firestore every 30 seconds
+  // Sync Ledger to Firestore every 60 seconds (Increased from 30s to save quota)
   setInterval(async () => {
+    // 1. Sync User Balances/Bets
     const dirtyUsers = Array.from(userLedger.entries()).filter(([_, data]) => data.dirty);
-    if (dirtyUsers.length === 0) return;
-
-    console.log(`[LEDGER] Flushing ${dirtyUsers.length} dirty user balances/bets to Firestore...`);
-    for (const [userId, data] of dirtyUsers) {
-      try {
-        const userRef = docClient(dbClient, 'users', userId);
-        await updateDocClient(userRef, { 
-          balance: data.balance,
-          referralBalance: data.referralBalance,
-          recentBets: data.recentBets.slice(0, 50) 
-        });
-        data.dirty = false;
-      } catch (e: any) {
-        if (e.message?.includes('RESOURCE_EXHAUSTED') || e.message?.includes('quota')) {
-          console.error(`[LEDGER] QUOTA EXCEEDED for ${userId}. Will retry in next flush.`);
-          // Keep dirty = true so we retry next time
-        } else {
-          console.error(`[LEDGER] Failed to sync user ${userId}:`, e.message || e);
-          data.dirty = false; // Stop retrying for non-quota fatal errors
+    if (dirtyUsers.length > 0) {
+      console.log(`[LEDGER] Flushing ${dirtyUsers.length} dirty user balances/bets to Firestore...`);
+      for (const [userId, data] of dirtyUsers) {
+        try {
+          const userRef = docClient(dbClient, 'users', userId);
+          await updateDocClient(userRef, { 
+            balance: data.balance,
+            referralBalance: data.referralBalance,
+            recentBets: data.recentBets.slice(0, 50) 
+          });
+          data.dirty = false;
+        } catch (e: any) {
+          if (e.message?.includes('RESOURCE_EXHAUSTED') || e.message?.includes('quota')) {
+            console.error(`[LEDGER] QUOTA EXCEEDED for ${userId}. Will retry in next flush.`);
+          } else {
+            console.error(`[LEDGER] Failed to sync user ${userId}:`, e.message || e);
+            data.dirty = false;
+          }
         }
       }
     }
-  }, 30000);
+
+    // 2. Sync Global Config (Every 1 minute)
+    try {
+      const configRef = docClient(dbClient, 'settings', 'config');
+      await updateDocClient(configRef, {
+        currentRound: gameStateMemory.currentRound,
+        lastFinalValue: gameStateMemory.lastFinalValue,
+        nextCrashValue: gameStateMemory.nextCrashValue,
+        status: gameStateMemory.status
+      });
+    } catch (e: any) {
+      if (!e.message?.includes('quota')) console.error("[LEDGER] Config sync failed:", e.message);
+    }
+  }, 60000);
 
   // Betting API (Uses Ledger to save writes)
   app.post("/api/game/bet", async (req, res) => {
@@ -470,10 +477,13 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.resolve(__dirname, "dist");
+    // Serve static files from dist
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    
+    // Fallback all other requests to index.html for React Router
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
