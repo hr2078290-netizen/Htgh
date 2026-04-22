@@ -77,6 +77,14 @@ export default function MinesGame() {
           numMines: mineCount
         })
       });
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        console.error("Non-JSON response received:", text);
+        throw new Error(`Server returned non-JSON response (${res.status}). Please check console for details.`);
+      }
+
       const data = await res.json();
       if (data.success) {
         setGameState('playing');
@@ -105,6 +113,14 @@ export default function MinesGame() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: profile?.uid, tileIndex: index })
       });
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        console.error("Non-JSON response received (reveal):", text);
+        throw new Error(`Server returned non-JSON response (${res.status})`);
+      }
+
       const data = await res.json();
 
       if (data.success) {
@@ -159,6 +175,14 @@ export default function MinesGame() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: profile?.uid })
       });
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        console.error("Non-JSON response received:", text);
+        throw new Error(`Server returned non-JSON response (${res.status})`);
+      }
+
       const data = await res.json();
       if (data.success) {
         if (!isMuted) winAudio.current?.play().catch(() => {});

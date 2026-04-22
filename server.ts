@@ -111,6 +111,7 @@ async function startServer() {
 
   // Mines API
   app.post("/api/mines/start", async (req, res) => {
+    console.log(`[MINES_START_REQ] userId: ${req.body?.userId}, bet: ${req.body?.betAmount}`);
     const { userId, betAmount, numMines } = req.body;
     
     if (numMines < 1 || numMines > 24) return res.status(400).json({ error: "Invalid mines count" });
@@ -118,7 +119,10 @@ async function startServer() {
 
     try {
       const user = await getLedgerUser(userId);
-      if (user.balance < betAmount) return res.status(400).json({ error: "Insufficient balance" });
+      if (!user || user.balance < betAmount) {
+        console.warn(`[MINES_START_FAIL] Insufficient balance for ${userId}: Need ${betAmount}, has ${user?.balance}`);
+        return res.status(400).json({ error: "Insufficient balance" });
+      }
 
       // Deduct balance
       user.balance -= betAmount;
@@ -147,6 +151,7 @@ async function startServer() {
       };
 
       activeMinesGames.set(userId, gameState);
+      console.log(`[MINES_START_SUCCESS] Game started for ${userId}`);
 
       res.json({
         success: true,
@@ -158,7 +163,8 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      console.error("[MINES_START_ERR] Critical failure:", e);
+      res.status(500).json({ error: "Internal server error during game start", details: e.message });
     }
   });
 
@@ -692,10 +698,14 @@ async function startServer() {
     }
   });
 
-  // Explicit 404 for missing API routes to prevent HTML fallback
+  // Explicit 404 for missing API routes to prevent HTML fallback (CRITICAL)
   app.all("/api/*", (req, res) => {
-    console.warn(`[API_404] No route matched for ${req.method} ${req.url}`);
-    res.status(404).json({ error: `API route ${req.url} not found` });
+    console.warn(`[API_404_MATCH] ${req.method} ${req.url} -> Default JSON 404`);
+    res.status(404).json({ 
+      error: `API route ${req.url} not found`,
+      method: req.method,
+      path: req.path
+    });
   });
 
   // Vite middleware for development
@@ -712,8 +722,10 @@ async function startServer() {
     
     // Fallback all other requests to index.html for React Router
     app.get("*", (req, res) => {
-      if (req.url.startsWith('/api')) {
-        console.warn(`[API_FALLBACK] API request hit HTML fallback: ${req.method} ${req.url}`);
+      // Safety check: Never serve HTML for API paths
+      if (req.url.startsWith('/api') || req.path.startsWith('/api')) {
+        console.error(`[CRITICAL_FALLBACK_LEAK] API request reached HTML fallback: ${req.method} ${req.url}`);
+        return res.status(404).json({ error: "API route not found (fallback leak)" });
       }
       res.sendFile(path.join(distPath, "index.html"));
     });
