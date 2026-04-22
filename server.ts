@@ -582,6 +582,12 @@ async function startServer() {
     }
   });
 
+  // Explicit 404 for missing API routes to prevent HTML fallback
+  app.all("/api/*", (req, res) => {
+    console.warn(`[API_404] No route matched for ${req.method} ${req.url}`);
+    res.status(404).json({ error: `API route ${req.url} not found` });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

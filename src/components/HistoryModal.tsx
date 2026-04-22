@@ -11,7 +11,7 @@ interface HistoryModalProps {
 
 const getNetworkConfig = () => {
   return {
-    apiBase: `${window.location.origin}/api`
+    apiBase: '/api'
   };
 };
 
