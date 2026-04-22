@@ -50,7 +50,8 @@ async function startServer() {
   // --- GLOBAL STATE ---
   const globalConfig = {
     houseEdge: 3,
-    minesDifficultMode: 'normal'
+    minesDifficultMode: 'normal',
+    minesRigging: 'random' as 'random' | 'win' | 'lose'
   };
 
   // Force Initialize Config on Startup (Non-blocking)
@@ -121,8 +122,13 @@ async function startServer() {
       user.balance -= betAmount;
       user.dirty = true;
 
-      // Generate mines
+      // Generate mines with rigging capability
       const mines: number[] = [];
+      
+      // If rigging is set to 'win', we stay random but we could implement complex logic here
+      // For now, let's keep the generation logic simple but aware of rigging global var
+      // To implement 'rigging', we modify the reveal logic instead usually
+      
       while (mines.length < numMines) {
         const idx = Math.floor(Math.random() * 25);
         if (!mines.includes(idx)) mines.push(idx);
@@ -163,6 +169,34 @@ async function startServer() {
 
     if (game.mines.includes(tileIndex)) {
       // HIT MINE
+      // RIGGING: If global rigging is 'win' and it was a random hit, we could save them
+      if (globalConfig.minesRigging === 'win') {
+        // Swap mine to a non-revealed non-mine tile
+        const safeTiles = [];
+        for(let i=0; i<25; i++) {
+          if(!game.mines.includes(i) && !game.revealed.includes(i)) {
+            safeTiles.push(i);
+          }
+        }
+        if (safeTiles.length > 0) {
+          const newSafeTile = safeTiles[Math.floor(Math.random() * safeTiles.length)];
+          // Modify mines: remove current hit index, add dummy mine elsewhere
+          const mineIdx = game.mines.indexOf(tileIndex);
+          // Find another safe place for this mine
+          const possibleNewMinePlaces = [];
+          for(let i=0; i<25; i++) {
+            if(!game.mines.includes(i) && !game.revealed.includes(i) && i !== tileIndex) {
+              possibleNewMinePlaces.push(i);
+            }
+          }
+          if (possibleNewMinePlaces.length > 0) {
+            game.mines[mineIdx] = possibleNewMinePlaces[Math.floor(Math.random() * possibleNewMinePlaces.length)];
+          }
+          // Now proceed as if it was a diamond
+          return proceedAsDiamond(res, game, tileIndex);
+        }
+      }
+      
       const user = await getLedgerUser(userId);
       const historyEntry = {
         game: 'Mines',
@@ -187,52 +221,89 @@ async function startServer() {
       });
     } else {
       // DIAMOND
-      game.revealed.push(tileIndex);
-      game.multiplier = calculateMinesMultiplier(game.numMines, game.revealed.length);
-
-      if (game.revealed.length + game.numMines === 25) {
-        // Automatic win if all diamonds revealed
-        const winAmount = parseFloat((game.bet * game.multiplier).toFixed(2));
-        const user = await getLedgerUser(userId);
-        user.balance += winAmount;
-        user.dirty = true;
-
-        const historyEntry = {
-          game: 'Mines',
-          bet: game.bet,
-          mines: game.numMines,
-          multiplier: game.multiplier,
-          payout: winAmount,
-          status: 'won',
-          timestamp: Date.now()
-        };
-        user.recentBets.unshift(historyEntry);
-        user.recentBets = user.recentBets.slice(0, 50);
-
-        game.isGameOver = true;
-        activeMinesGames.delete(userId);
-
-        return res.json({
-          success: true,
-          hitMine: false,
-          revealed: game.revealed,
-          multiplier: game.multiplier,
-          isGameOver: true,
-          winAmount,
-          newBalance: user.balance,
-          mines: game.mines
-        });
+      // RIGGING: If global rigging is 'lose' and they hit a diamond, we force a mine hit
+      if (globalConfig.minesRigging === 'lose') {
+        const mineIndices = game.mines;
+        // Proceed as if hit a mine
+        return handleMineHit(res, game, userId, tileIndex);
       }
+      
+      return proceedAsDiamond(res, game, tileIndex);
+    }
+  });
 
-      res.json({
+  // Helper functions for rigging
+  async function handleMineHit(res: any, game: any, userId: string, tileIndex: number) {
+    const user = await getLedgerUser(userId);
+    const historyEntry = {
+      game: 'Mines',
+      bet: game.bet,
+      mines: game.numMines,
+      multiplier: 0,
+      payout: 0,
+      status: 'lost',
+      timestamp: Date.now()
+    };
+    user.recentBets.unshift(historyEntry);
+    user.recentBets = user.recentBets.slice(0, 50);
+    user.dirty = true;
+
+    game.isGameOver = true;
+    activeMinesGames.delete(userId);
+    return res.json({
+      success: true,
+      hitMine: true,
+      mines: game.mines,
+      isGameOver: true
+    });
+  }
+
+  async function proceedAsDiamond(res: any, game: any, tileIndex: number) {
+    game.revealed.push(tileIndex);
+    game.multiplier = calculateMinesMultiplier(game.numMines, game.revealed.length);
+
+    if (game.revealed.length + game.numMines === 25) {
+      // Automatic win if all diamonds revealed
+      const winAmount = parseFloat((game.bet * game.multiplier).toFixed(2));
+      const user = await getLedgerUser(game.userId);
+      user.balance += winAmount;
+      user.dirty = true;
+
+      const historyEntry = {
+        game: 'Mines',
+        bet: game.bet,
+        mines: game.numMines,
+        multiplier: game.multiplier,
+        payout: winAmount,
+        status: 'won',
+        timestamp: Date.now()
+      };
+      user.recentBets.unshift(historyEntry);
+      user.recentBets = user.recentBets.slice(0, 50);
+
+      game.isGameOver = true;
+      activeMinesGames.delete(game.userId);
+
+      return res.json({
         success: true,
         hitMine: false,
         revealed: game.revealed,
         multiplier: game.multiplier,
-        isGameOver: false
+        isGameOver: true,
+        winAmount,
+        newBalance: user.balance,
+        mines: game.mines
       });
     }
-  });
+
+    res.json({
+      success: true,
+      hitMine: false,
+      revealed: game.revealed,
+      multiplier: game.multiplier,
+      isGameOver: false
+    });
+  }
 
   app.post("/api/mines/cashout", async (req, res) => {
     const { userId } = req.body;
@@ -427,6 +498,29 @@ async function startServer() {
       res.json({ history: user.recentBets });
     } catch (e) {
       res.json({ history: [] });
+    }
+  });
+
+  // Admin Mines Stats API
+  app.get("/api/admin/mines/active", (req, res) => {
+    const list = Array.from(activeMinesGames.values()).map(g => ({
+      userId: g.userId,
+      bet: g.bet,
+      numMines: g.numMines,
+      revealedCount: g.revealed.length,
+      multiplier: g.multiplier,
+      mines: g.mines // For admin to see where mines are
+    }));
+    res.json({ games: list, rigging: globalConfig.minesRigging });
+  });
+
+  app.post("/api/admin/mines/rig", (req, res) => {
+    const { mode } = req.body;
+    if (['random', 'win', 'lose'].includes(mode)) {
+      globalConfig.minesRigging = mode as any;
+      res.json({ success: true, mode: globalConfig.minesRigging });
+    } else {
+      res.status(400).json({ error: "Invalid rigging mode" });
     }
   });
 
