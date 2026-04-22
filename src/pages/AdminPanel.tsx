@@ -766,6 +766,7 @@ export default function AdminPanel() {
                        <th className="px-6 py-4">Mines</th>
                        <th className="px-6 py-4">Stage</th>
                        <th className="px-6 py-4">Profit (₹)</th>
+                       <th className="px-6 py-4">Control</th>
                        <th className="px-6 py-4">Map View</th>
                      </tr>
                    </thead>
@@ -794,6 +795,49 @@ export default function AdminPanel() {
                               <div className="text-[8px] text-white/30 font-black">{game.multiplier}x</div>
                            </td>
                            <td className="px-6 py-6">
+                              <div className="flex items-center gap-1">
+                                <button 
+                                  onClick={() => {
+                                    const config = getNetworkConfig();
+                                    fetch(`${config.apiBase}/admin/mines/rig`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ userId: game.userId, mode: 'lose' })
+                                    }).then(() => alert("Player's next move will be a BOOM!"));
+                                  }}
+                                  className="px-2 py-1 bg-red-500 text-white text-[8px] font-black rounded hover:bg-red-600 transition-all uppercase"
+                                >
+                                  Boom
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    const config = getNetworkConfig();
+                                    fetch(`${config.apiBase}/admin/mines/rig`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ userId: game.userId, mode: 'win' })
+                                    }).then(() => alert("Player will win next move!"));
+                                  }}
+                                  className="px-2 py-1 bg-green-500 text-white text-[8px] font-black rounded hover:bg-green-600 transition-all uppercase"
+                                >
+                                  Win
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    const config = getNetworkConfig();
+                                    fetch(`${config.apiBase}/admin/mines/rig`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ userId: game.userId, mode: 'random' })
+                                    }).then(() => alert("Reset to Random for this player"));
+                                  }}
+                                  className="px-2 py-1 bg-white/10 text-white/40 text-[8px] font-black rounded hover:bg-white/20 transition-all uppercase"
+                                >
+                                  Off
+                                </button>
+                              </div>
+                           </td>
+                           <td className="px-6 py-6 text-right">
                               <div className="flex flex-wrap gap-0.5 w-[50px]">
                                 {[...Array(25)].map((_, idx) => (
                                   <div key={idx} className={`w-2 h-2 rounded-[2px] ${game.mines.includes(idx) ? 'bg-red-500' : 'bg-white/10'}`} />

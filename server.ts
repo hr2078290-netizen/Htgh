@@ -82,6 +82,8 @@ async function startServer() {
     isGameOver: boolean;
   }> = new Map();
 
+  const playerRiggings: Map<string, 'random' | 'win' | 'lose'> = new Map();
+
   // Helper to calculate Mines multiplier
   const calculateMinesMultiplier = (numMines: number, revealedCount: number) => {
     let multiplier = 1.0;
@@ -169,8 +171,10 @@ async function startServer() {
 
     if (game.mines.includes(tileIndex)) {
       // HIT MINE
-      // RIGGING: If global rigging is 'win' and it was a random hit, we could save them
-      if (globalConfig.minesRigging === 'win') {
+      // RIGGING: Individual player rigging check first, then global
+      const riggingMode = playerRiggings.get(userId) || globalConfig.minesRigging;
+      
+      if (riggingMode === 'win') {
         // Swap mine to a non-revealed non-mine tile
         const safeTiles = [];
         for(let i=0; i<25; i++) {
@@ -221,12 +225,17 @@ async function startServer() {
       });
     } else {
       // DIAMOND
-      // RIGGING: If global rigging is 'lose' and they hit a diamond, we force a mine hit
-      if (globalConfig.minesRigging === 'lose') {
+      // RIGGING: Individual player rigging check first, then global
+      const riggingMode = playerRiggings.get(userId) || globalConfig.minesRigging;
+      
+      if (riggingMode === 'lose') {
         const mineIndices = game.mines;
         // Proceed as if hit a mine
         return handleMineHit(res, game, userId, tileIndex);
       }
+      
+      // Clear personal rigging after one use if it was personal? 
+      // Actually, keep it until game over or manual reset.
       
       return proceedAsDiamond(res, game, tileIndex);
     }
@@ -515,10 +524,15 @@ async function startServer() {
   });
 
   app.post("/api/admin/mines/rig", (req, res) => {
-    const { mode } = req.body;
+    const { mode, userId } = req.body;
     if (['random', 'win', 'lose'].includes(mode)) {
-      globalConfig.minesRigging = mode as any;
-      res.json({ success: true, mode: globalConfig.minesRigging });
+      if (userId) {
+        playerRiggings.set(userId, mode as any);
+        res.json({ success: true, mode, userId });
+      } else {
+        globalConfig.minesRigging = mode as any;
+        res.json({ success: true, mode: globalConfig.minesRigging });
+      }
     } else {
       res.status(400).json({ error: "Invalid rigging mode" });
     }
@@ -692,7 +706,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(__dirname, "dist");
+    const distPath = path.join(process.cwd(), "dist");
     // Serve static files from dist
     app.use(express.static(distPath));
     
