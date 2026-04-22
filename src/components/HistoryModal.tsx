@@ -10,9 +10,8 @@ interface HistoryModalProps {
 }
 
 const getNetworkConfig = () => {
-  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('asia-southeast1.run.app');
   const protocol = window.location.protocol;
-  const domain = isLocal ? window.location.host : 'jalwa369.com';
+  const domain = window.location.host;
   return {
     apiBase: `${protocol}//${domain}/api`
   };

@@ -6,8 +6,7 @@ import { GameSettings, DepositRequest, WithdrawalRequest, UserProfile, GameHisto
 import { useAuth } from '../lib/AuthContext';
 
 const getNetworkConfig = () => {
-  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('asia-southeast1.run.app');
-  const domain = isLocal ? window.location.host : 'jalwa369.com';
+  const domain = window.location.host;
   const protocol = window.location.protocol;
   const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
   

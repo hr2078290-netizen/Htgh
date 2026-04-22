@@ -213,11 +213,11 @@ export default function Profile() {
                             <div className="text-[8px] text-white/40 uppercase font-bold mb-1">Referral Link</div>
                             <div className="flex items-center gap-2">
                               <div className="flex-1 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg font-mono font-bold text-[10px] text-pink-400 truncate">
-                                https://jalwa369.com/register?ref={profile.referralCode}
+                                https://{window.location.host}/register?ref={profile.referralCode}
                               </div>
                               <button 
                                 onClick={() => {
-                                  navigator.clipboard.writeText(`https://jalwa369.com/register?ref=${profile.referralCode}`);
+                                  navigator.clipboard.writeText(`https://${window.location.host}/register?ref=${profile.referralCode}`);
                                   alert('Link copied!');
                                 }}
                                 className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/10"

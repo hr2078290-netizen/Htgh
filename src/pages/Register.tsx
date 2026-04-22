@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, collection, query, where, getDocs, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { Diamond, Mail, Lock, UserPlus, Eye, EyeOff, Users } from 'lucide-react';
 import { UserProfile } from '../types';
@@ -46,9 +46,24 @@ export default function Register() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const u = userCredential.user;
 
+      // Get unique numeric ID starting from 251500
+      const numericId = await runTransaction(db, async (transaction) => {
+        const statsRef = doc(db, 'settings', 'stats');
+        const statsDoc = await transaction.get(statsRef);
+        
+        let nextId = 251500;
+        if (statsDoc.exists()) {
+          nextId = (statsDoc.data().userCounter || 251499) + 1;
+        }
+        
+        transaction.set(statsRef, { userCounter: nextId }, { merge: true });
+        return nextId;
+      });
+
       // Create profile manually here because we want to include referral info
       const newProfile: UserProfile = {
         uid: u.uid,
+        numericId: numericId,
         email: u.email || '',
         displayName: u.email ? u.email.split('@')[0] : 'Pilot',
         balance: 500, // Signup Bonus
