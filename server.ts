@@ -46,246 +46,273 @@ async function startServer() {
   // Note: Anonymous Auth is disabled in this project, so we'll rely on permissive rules 
   // for the server-side writes for now. 
   
+  // --- GLOBAL STATE ---
+  const globalConfig = {
+    houseEdge: 3,
+    minesDifficultMode: 'normal'
+  };
+
   // Force Initialize Config on Startup (Non-blocking)
   const forceInit = async () => {
     try {
       console.log("[SERVER] Loading initial config from Firestore...");
-      // We don't do the health check write anymore to save quota.
-      
       const configRef = docClient(dbClient, 'settings', 'config');
       const snap = await getDocClient(configRef);
-      if (!snap.exists()) {
-        console.log("FORCE START: Config document missing. Creating initial state...");
-        // We TRY to create it, but if it fails (quota), we just use defaults.
-        setDocClient(configRef, {
-          status: 'waiting',
-          nextCrashValue: 1.5,
-          currentRound: 1,
-          countdownEndTime: Date.now() + 5000
-        }).catch(e => console.error("Initial config creation failed (likely quota):", e.message));
-      } else {
+      if (snap.exists()) {
         const data = snap.data();
-        console.log("Config document found. Current state:", data?.status);
-        
-        // Sync memory with persisted state
-        gameStateMemory.nextCrashValue = data.nextCrashValue || 1.5;
-        gameStateMemory.currentRound = data.currentRound || 1;
-        gameStateMemory.isManualMode = !!data.isManualMode;
-        gameStateMemory.status = data.status || 'waiting';
-
-        // If stuck in crashed or flying without timestamp, force reset
-        if ((data?.status === 'crashed' && !data?.nextTransitionTime) || (data?.status === 'flying' && !data?.startTime)) {
-          console.log("Detected stuck state on startup. Resetting memory...");
-          gameStateMemory.status = 'waiting';
-          gameStateMemory.countdownEndTime = Date.now() + 5000;
-        }
+        globalConfig.houseEdge = data.houseEdge || 3;
+        globalConfig.minesDifficultMode = data.minesDifficultMode || 'normal';
       }
-      // Load history (Non-blocking)
-      getDocsClient(queryClient(collectionClient(dbClient, 'history'), orderByClient('timestamp', 'desc'), limitClient(15)))
-        .then(histSnap => {
-          gameStateMemory.history = histSnap.docs.map(d => d.data());
-          console.log(`[SERVER] Loaded ${gameStateMemory.history.length} history items.`);
-        })
-        .catch(e => console.error("History load failed (likely quota):", e.message));
-
     } catch (e: any) {
-      console.error("Non-critical Startup Init Error (Client):", e.message || e);
+      console.error("Non-critical Startup Init Error:", e.message);
     }
   };
-  // Start init but don't await it, allowing server to listen on PORT 3000 immediately
   forceInit();
 
-  // --- SERVER AUTHORITATIVE GAME STATE (IN-MEMORY) ---
-  // This solves the Firestore "RESOURCE_EXHAUSTED" error by not writing state every round.
-  const gameStateMemory = {
-    status: 'waiting' as 'waiting' | 'flying' | 'crashed',
-    currentRound: 1,
-    multiplier: 1.0,
-    startTime: 0,
-    countdownEndTime: 0,
-    nextTransitionTime: 0,
-    lastFinalValue: 0,
-    nextCrashValue: 1.5,
-    isManualMode: false,
-    manualOverrideNextValue: null as number | null,
-    history: [] as any[],
-    activeBets: [] as any[],
-    queuedBets: [] as any[]
+  // --- SERVER AUTHORITATIVE MINES GAME STATE (IN-MEMORY) ---
+  const activeMinesGames: Map<string, {
+    userId: string;
+    bet: number;
+    numMines: number;
+    mines: number[];
+    revealed: number[];
+    multiplier: number;
+    isGameOver: boolean;
+  }> = new Map();
+
+  // Helper to calculate Mines multiplier
+  const calculateMinesMultiplier = (numMines: number, revealedCount: number) => {
+    let multiplier = 1.0;
+    const totalTiles = 25;
+    const houseEdge = 0.03; // 3% house edge
+
+    for (let i = 0; i < revealedCount; i++) {
+      multiplier *= (totalTiles - i) / (totalTiles - numMines - i);
+    }
+    
+    return parseFloat((multiplier * (1 - houseEdge)).toFixed(2));
   };
 
   app.use(express.json());
 
-  // Real-time Clients (SSE & WS)
-  let sseClients: any[] = [];
-  let wsClients: Set<WebSocket> = new Set();
-  let fakeUserIdCounter = 251500;
-
-  const broadcastState = () => {
-    const data = JSON.stringify({
-      ...gameStateMemory,
-      serverTime: Date.now()
-    });
-    // Send to SSE
-    sseClients.forEach(client => client.res.write(`data: ${data}\n\n`));
-    // Send to WS
-    wsClients.forEach(ws => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
-      }
-    });
-  };
-
-  // WebSocket Server Setup
-  const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: '/api/game/ws' });
-
-  wss.on('connection', (ws) => {
-    console.log("[WS] New client connected");
-    wsClients.add(ws);
+  // Mines API
+  app.post("/api/mines/start", async (req, res) => {
+    const { userId, betAmount, numMines } = req.body;
     
-    // Send initial state
-    ws.send(JSON.stringify({ ...gameStateMemory, serverTime: Date.now() }));
+    if (numMines < 1 || numMines > 24) return res.status(400).json({ error: "Invalid mines count" });
+    if (betAmount < 1) return res.status(400).json({ error: "Invalid bet amount" });
 
-    ws.on('close', () => {
-      console.log("[WS] Client disconnected");
-      wsClients.delete(ws);
-    });
+    try {
+      const user = await getLedgerUser(userId);
+      if (user.balance < betAmount) return res.status(400).json({ error: "Insufficient balance" });
 
-    ws.on('error', (err) => {
-      console.error("[WS] Error:", err);
-      wsClients.delete(ws);
-    });
-  });
+      // Deduct balance
+      user.balance -= betAmount;
+      user.dirty = true;
 
-  // SSE Endpoint
-  app.get("/api/game/stream", (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    const clientId = Date.now();
-    const newClient = { id: clientId, res };
-    sseClients.push(newClient);
-
-    const keepAlive = setInterval(() => {
-      res.write(': keep-alive\n\n');
-    }, 10000); // 10s heartbeat for better proxy stability
-
-    req.on('close', () => {
-      clearInterval(keepAlive);
-      sseClients = sseClients.filter(c => c.id !== clientId);
-    });
-
-    // Send initial payload
-    res.write(`data: ${JSON.stringify({ ...gameStateMemory, serverTime: Date.now() })}\n\n`);
-  });
-
-  // REST Fallback for Game State
-  app.get("/api/game/state", (req, res) => {
-    res.json({
-      ...gameStateMemory,
-      serverTime: Date.now()
-    });
-  });
-
-  // Game Loop (In-Memory)
-  setInterval(() => {
-    const now = Date.now();
-
-    if (gameStateMemory.status === 'crashed') {
-      if (now >= gameStateMemory.nextTransitionTime) {
-        gameStateMemory.status = 'waiting';
-        gameStateMemory.multiplier = 1.0;
-        gameStateMemory.currentRound++;
-        gameStateMemory.countdownEndTime = now + 6000; // Shorter waiting time (6s) like real Aviator
-        gameStateMemory.activeBets = [...gameStateMemory.queuedBets];
-        gameStateMemory.queuedBets = [];
-        broadcastState();
+      // Generate mines
+      const mines: number[] = [];
+      while (mines.length < numMines) {
+        const idx = Math.floor(Math.random() * 25);
+        if (!mines.includes(idx)) mines.push(idx);
       }
-    } else if (gameStateMemory.status === 'waiting') {
-      if (now >= gameStateMemory.countdownEndTime) {
-        gameStateMemory.status = 'flying';
-        gameStateMemory.startTime = now;
-        broadcastState();
-      }
-    } else if (gameStateMemory.status === 'flying') {
-      const elapsed = (now - gameStateMemory.startTime) / 1000;
-      gameStateMemory.multiplier = Math.exp(0.15 * elapsed);
 
-      if (gameStateMemory.multiplier >= gameStateMemory.nextCrashValue) {
-        // CRASH!
-        gameStateMemory.status = 'crashed';
-        gameStateMemory.lastFinalValue = gameStateMemory.nextCrashValue;
-        gameStateMemory.nextTransitionTime = now + 3000;
-        
-        // Add to history (limit 15)
-        const histItem = { value: gameStateMemory.lastFinalValue, timestamp: TimestampClient.now(), round: gameStateMemory.currentRound };
-        gameStateMemory.history = [histItem, ...gameStateMemory.history].slice(0, 15);
+      const gameState = {
+        userId,
+        bet: betAmount,
+        numMines,
+        mines,
+        revealed: [],
+        multiplier: 1.0,
+        isGameOver: false
+      };
 
-        // PERSIST CRASH TO FIRESTORE (Only once per round to save quota)
-        const roundId = `round_${gameStateMemory.currentRound}`;
-        const historyRef = docClient(dbClient, 'history', roundId);
-        setDocClient(historyRef, {
-          ...histItem, 
-          timestamp: serverTimestampClient()
-        }).catch(e => {
-          if (!e.message?.includes('quota')) {
-            console.error("HISTORY SAVE ERROR DETAILS:", e.message || e);
-          }
-        });
+      activeMinesGames.set(userId, gameState);
 
-        // OPTIMIZED BET PERSISTENCE: Save to In-Memory Ledger + Local user docs (batched)
-        gameStateMemory.activeBets.forEach(async (bet) => {
-          if (bet.userId.startsWith('fake_')) return;
-          
-          try {
-            const user = await getLedgerUser(bet.userId);
-            const betResult = {
-              ...bet,
-              round: gameStateMemory.currentRound,
-              finalMultiplier: gameStateMemory.lastFinalValue,
-              timestamp: new Date().toISOString(),
-              status: bet.status === 'cashed_out' ? 'win' : 'loss'
-            };
-            user.recentBets = [betResult, ...user.recentBets].slice(0, 50);
-            user.dirty = true;
-          } catch (e) {
-            // User not in ledger or error fetching
-          }
-        });
-        
-        // Calculate next crash value
-        let nextValue = 1.10;
-        if (gameStateMemory.manualOverrideNextValue) {
-          nextValue = gameStateMemory.manualOverrideNextValue;
-          gameStateMemory.manualOverrideNextValue = null;
-        } else if (!gameStateMemory.isManualMode) {
-          const rand = Math.random() * 100;
-          // More complex Aviator-style distribution
-          if (rand < 10) nextValue = parseFloat((1.01 + Math.random() * 0.10).toFixed(2)); // Instant crash 10%
-          else if (rand < 50) nextValue = parseFloat((1.11 + Math.random() * 0.89).toFixed(2)); // Mid-range 40%
-          else if (rand < 75) nextValue = parseFloat((2.01 + Math.random() * 2.99).toFixed(2)); // Up to 5x 25%
-          else if (rand < 90) nextValue = parseFloat((5.01 + Math.random() * 9.99).toFixed(2)); // Up to 15x 15%
-          else if (rand < 98) nextValue = parseFloat((15.01 + Math.random() * 34.99).toFixed(2)); // Up to 50x 8%
-          else nextValue = parseFloat((50.01 + Math.random() * 499.99).toFixed(2)); // High-flyer 2%
+      res.json({
+        success: true,
+        newBalance: user.balance,
+        gameState: {
+          revealed: [],
+          multiplier: 1.0,
+          isGameOver: false
         }
-        gameStateMemory.nextCrashValue = nextValue;
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
-        // Sync memory with persisted state every few rounds to save quota
-        // Only broadcast, persistence is handled by a separate throttled sync
-        broadcastState();
+  app.post("/api/mines/reveal", async (req, res) => {
+    const { userId, tileIndex } = req.body;
+    const game = activeMinesGames.get(userId);
+
+    if (!game || game.isGameOver) return res.status(400).json({ error: "No active game" });
+    if (game.revealed.includes(tileIndex)) return res.status(400).json({ error: "Already revealed" });
+
+    if (game.mines.includes(tileIndex)) {
+      // HIT MINE
+      game.isGameOver = true;
+      activeMinesGames.delete(userId);
+      return res.json({
+        success: true,
+        hitMine: true,
+        mines: game.mines,
+        isGameOver: true
+      });
+    } else {
+      // DIAMOND
+      game.revealed.push(tileIndex);
+      game.multiplier = calculateMinesMultiplier(game.numMines, game.revealed.length);
+
+      if (game.revealed.length + game.numMines === 25) {
+        // Automatic win if all diamonds revealed
+        const winAmount = parseFloat((game.bet * game.multiplier).toFixed(2));
+        const user = await getLedgerUser(userId);
+        user.balance += winAmount;
+        user.dirty = true;
+        game.isGameOver = true;
+        activeMinesGames.delete(userId);
+
+        return res.json({
+          success: true,
+          hitMine: false,
+          revealed: game.revealed,
+          multiplier: game.multiplier,
+          isGameOver: true,
+          winAmount,
+          newBalance: user.balance,
+          mines: game.mines
+        });
       }
-    }
-  }, 100);
 
-  // Broadcaster for real-time multiplier feel (higher frequency for flying)
-  setInterval(() => {
-    if (gameStateMemory.status === 'flying') {
-      broadcastState();
+      res.json({
+        success: true,
+        hitMine: false,
+        revealed: game.revealed,
+        multiplier: game.multiplier,
+        isGameOver: false
+      });
     }
-  }, 200);
+  });
+
+  app.post("/api/mines/cashout", async (req, res) => {
+    const { userId } = req.body;
+    const game = activeMinesGames.get(userId);
+
+    if (!game || game.isGameOver || game.revealed.length === 0) {
+      return res.status(400).json({ error: "Cannot cash out" });
+    }
+
+    try {
+      const winAmount = parseFloat((game.bet * game.multiplier).toFixed(2));
+      const user = await getLedgerUser(userId);
+      
+      user.balance += winAmount;
+      user.dirty = true;
+      game.isGameOver = true;
+      const finalMines = [...game.mines];
+      activeMinesGames.delete(userId);
+
+      res.json({
+        success: true,
+        winAmount,
+        newBalance: user.balance,
+        mines: finalMines
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- CASHFREE INTEGRATION ---
+  app.post("/api/payment/cashfree/create-order", async (req, res) => {
+    const { amount, userId, customerEmail, customerPhone } = req.body;
+
+    const clientId = process.env.CASHFREE_CLIENT_ID;
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+    const isProd = process.env.NODE_ENV === 'production';
+
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({ error: "Cashfree is not configured." });
+    }
+
+    try {
+      const response = await fetch(
+        isProd ? "https://api.cashfree.com/pg/orders" : "https://sandbox.cashfree.com/pg/orders",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-client-id": clientId,
+            "x-client-secret": clientSecret,
+            "x-api-version": "2023-08-01"
+          },
+          body: JSON.stringify({
+            order_amount: amount,
+            order_currency: "INR",
+            order_id: `order_${Date.now()}_${userId.substring(0, 5)}`,
+            customer_details: {
+              customer_id: userId,
+              customer_email: customerEmail || "customer@example.com",
+              customer_phone: customerPhone || "9999999999"
+            },
+            order_meta: {
+              return_url: `${req.headers.origin}/api/payment/cashfree/verify?order_id={order_id}`
+            }
+          })
+        }
+      );
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Failed to create Cashfree order");
+
+      res.json({
+        payment_session_id: data.payment_session_id,
+        order_id: data.order_id
+      });
+    } catch (e: any) {
+      console.error("[CASHFREE] Order creation failed:", e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/payment/cashfree/verify", async (req, res) => {
+    const { order_id } = req.query;
+    const clientId = process.env.CASHFREE_CLIENT_ID;
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+    const isProd = process.env.NODE_ENV === 'production';
+
+    try {
+      const response = await fetch(
+        isProd ? `https://api.cashfree.com/pg/orders/${order_id}` : `https://sandbox.cashfree.com/pg/orders/${order_id}`,
+        {
+          headers: {
+            "x-client-id": clientId!,
+            "x-client-secret": clientSecret!,
+            "x-api-version": "2023-08-01"
+          }
+        }
+      );
+
+      const data = await response.json();
+      if (data.order_status === 'PAID') {
+        const userId = data.customer_details.customer_id;
+        const amount = data.order_amount;
+
+        const user = await getLedgerUser(userId);
+        user.balance += parseFloat(amount);
+        user.dirty = true;
+
+        // Redirect back to profile or success page
+        res.redirect("/profile?status=success&amount=" + amount);
+      } else {
+        res.redirect("/profile?status=failed");
+      }
+    } catch (e) {
+      res.redirect("/profile?status=error");
+    }
+  });
 
   // --- BALANCE LEDGER (In-Memory to save Firestore Quota) ---
   const userLedger: Map<string, { balance: number, referralBalance: number, recentBets: any[], dirty: boolean }> = new Map();
@@ -337,160 +364,7 @@ async function startServer() {
         }
       }
     }
-
-    // 2. Sync Global Config (Every 10 seconds)
-    try {
-      const configRef = docClient(dbClient, 'settings', 'config');
-      await updateDocClient(configRef, {
-        currentRound: gameStateMemory.currentRound,
-        lastFinalValue: gameStateMemory.lastFinalValue,
-        nextCrashValue: gameStateMemory.nextCrashValue,
-        status: gameStateMemory.status
-      });
-    } catch (e: any) {
-      if (!e.message?.includes('quota')) console.error("[LEDGER] Config sync failed:", e.message);
-    }
   }, 10000);
-
-  // Betting API (Uses Ledger to save writes)
-  app.post("/api/game/bet", async (req, res) => {
-    const { userId, email, amount, panel } = req.body;
-    console.log(`[BET] Request from ${userId} (${email}) for amount ${amount} on panel ${panel}`);
-    
-    try {
-      const user = await getLedgerUser(userId);
-      console.log(`[BET] Found user ${userId}. Balance: ${user.balance}, Referral: ${user.referralBalance}`);
-      const totalAvailable = user.balance + user.referralBalance;
-
-      if (totalAvailable < amount) {
-        console.warn(`[BET] Insufficient balance for ${userId}: ${totalAvailable} < ${amount}`);
-        return res.status(400).json({ error: "Insufficient balance" });
-      }
-
-      // Deduct from memory ledger
-      let remainingToDeduct = amount;
-      if (user.referralBalance >= remainingToDeduct) {
-        user.referralBalance -= remainingToDeduct;
-        remainingToDeduct = 0;
-      } else {
-        remainingToDeduct -= user.referralBalance;
-        user.referralBalance = 0;
-        user.balance -= remainingToDeduct;
-      }
-
-      user.dirty = true;
-
-      const targetRound = gameStateMemory.status === 'waiting' ? gameStateMemory.currentRound : gameStateMemory.currentRound + 1;
-      // High-resolution UUID-like ID to prevent React key collisions
-      const betId = `${userId}_${targetRound}_${panel}_${Math.random().toString(36).substring(2, 9)}`;
-      const bet = { id: betId, userId, email, amount, panel, status: 'pending', round: targetRound };
-
-      if (gameStateMemory.status === 'waiting') {
-        gameStateMemory.activeBets.push(bet);
-      } else {
-        gameStateMemory.queuedBets.push(bet);
-      }
-      
-      broadcastState();
-      
-      res.json({ 
-        success: true, 
-        newBalance: user.balance, 
-        newReferralBalance: user.referralBalance 
-      });
-    } catch (e: any) { 
-      console.error("[SERVER] Betting error:", e.message || e);
-      res.status(500).json({ error: "Betting error: " + (e.message || "Unknown") }); 
-    }
-  });
-
-  app.post("/api/game/cashout", async (req, res) => {
-    const { userId, panel, multiplier } = req.body;
-    if (gameStateMemory.status !== 'flying') {
-      return res.status(400).json({ error: "Game is not in flying state" });
-    }
-    
-    const betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
-    if (betIndex === -1) {
-      return res.status(400).json({ error: "No active bet found for this panel" });
-    }
-
-    const bet = gameStateMemory.activeBets[betIndex];
-    if (multiplier > gameStateMemory.multiplier + 0.5) {
-      return res.status(400).json({ error: "Invalid multiplier / Timing error" });
-    }
-
-    try {
-      const winAmount = parseFloat((bet.amount * multiplier).toFixed(2));
-      bet.status = 'cashed_out';
-      bet.cashoutValue = multiplier;
-      bet.winAmount = winAmount;
-
-      // Update Ledger
-      const user = await getLedgerUser(userId);
-      user.balance += winAmount;
-      user.dirty = true;
-      
-      broadcastState();
-      res.json({ 
-        success: true, 
-        winAmount,
-        newBalance: user.balance,
-        newReferralBalance: user.referralBalance
-      });
-    } catch (e: any) { 
-      console.error("[SERVER] Cashout error:", e.message || e);
-      res.status(500).json({ error: "Cashout failed: " + (e.message || "Unknown") }); 
-    }
-  });
-
-  app.post("/api/game/cancel", async (req, res) => {
-    const { userId, panel } = req.body;
-    console.log(`[CANCEL] Request from ${userId} for panel ${panel}`);
-    
-    let betIndex = -1;
-    let isQueued = false;
-
-    if (gameStateMemory.status === 'waiting') {
-      betIndex = gameStateMemory.activeBets.findIndex(b => b.userId === userId && b.panel === panel && b.status === 'pending');
-    } else {
-      betIndex = gameStateMemory.queuedBets.findIndex(b => b.userId === userId && b.panel === panel);
-      isQueued = true;
-    }
-
-    if (betIndex === -1) {
-      console.warn(`[CANCEL] No pending bet found for user ${userId} on panel ${panel}. State: ${gameStateMemory.status}`);
-      return res.status(400).json({ error: "No pending bet to cancel" });
-    }
-
-    const bet = isQueued ? gameStateMemory.queuedBets[betIndex] : gameStateMemory.activeBets[betIndex];
-    console.log(`[CANCEL] Found bet to cancel: ${bet.id}. Amount: ${bet.amount}`);
-
-    try {
-      // Refund via Ledger
-      const user = await getLedgerUser(userId);
-      user.balance += bet.amount;
-      user.dirty = true;
-      console.log(`[CANCEL] Refunded ${bet.amount} to user ${userId}. New balance: ${user.balance}`);
-
-      // Remove from memory
-      if (isQueued) {
-        gameStateMemory.queuedBets.splice(betIndex, 1);
-      } else {
-        gameStateMemory.activeBets.splice(betIndex, 1);
-      }
-      
-      broadcastState();
-      res.json({ 
-        success: true,
-        newBalance: user.balance,
-        newReferralBalance: user.referralBalance
-      });
-    } catch (e: any) {
-      console.error("[SERVER] Cancel error:", e.message || e);
-      res.status(500).json({ error: "Cancellation failed: " + (e.message || "Unknown") });
-    }
-  });
 
   // My Bets API (Optimized to return from ledger)
   app.get("/api/game/my-history", async (req, res) => {
@@ -508,8 +382,9 @@ async function startServer() {
   // Admin Config API
   app.post("/api/admin/game-config", async (req, res) => {
     const { field, value } = req.body;
-    (gameStateMemory as any)[field] = value;
-    broadcastState();
+    // Persist to Firestore directly for Mines settings
+    const configRef = docClient(dbClient, 'settings', 'config');
+    await updateDocClient(configRef, { [field]: value }).catch(() => {});
     res.json({ success: true });
   });
 
@@ -582,6 +457,71 @@ async function startServer() {
     }
   });
 
+  // --- CASHFREE INTEGRATION ---
+  app.post("/api/payment/cashfree/create-order", async (req, res) => {
+    const { amount, userId } = req.body;
+    try {
+      const { Cashfree } = await import("cashfree-pg");
+      (Cashfree as any).XClientId = process.env.CASHFREE_CLIENT_ID || "";
+      (Cashfree as any).XClientSecret = process.env.CASHFREE_CLIENT_SECRET || "";
+      (Cashfree as any).XEnvironment = (Cashfree as any).Environment?.PRODUCTION || "PRODUCTION";
+
+      const orderRequest = {
+        order_amount: amount,
+        order_currency: "INR",
+        customer_details: {
+          customer_id: userId,
+          customer_email: "user@example.com",
+          customer_phone: "9999999999"
+        },
+        order_meta: {
+          return_url: `${req.protocol}://${req.get('host')}/deposit?order_id={order_id}`
+        }
+      };
+
+      const response = await (Cashfree as any).PGCreateOrder("2023-08-01", orderRequest);
+      res.json(response.data);
+    } catch (e: any) {
+      console.error("[CASHFREE] Order creation failed:", e.response?.data || e.message);
+      res.status(500).json({ error: "Failed to create Cashfree order" });
+    }
+  });
+
+  app.post("/api/payment/cashfree/verify", async (req, res) => {
+    const { order_id, userId } = req.body;
+    try {
+      const { Cashfree } = await import("cashfree-pg");
+      (Cashfree as any).XClientId = process.env.CASHFREE_CLIENT_ID || "";
+      (Cashfree as any).XClientSecret = process.env.CASHFREE_CLIENT_SECRET || "";
+      (Cashfree as any).XEnvironment = (Cashfree as any).Environment?.PRODUCTION || "PRODUCTION";
+
+      const response = await (Cashfree as any).PGGetOrder("2023-08-01", order_id);
+      const order = response.data;
+
+      if (order.order_status === "PAID") {
+        const user = await getLedgerUser(userId);
+        user.balance += parseFloat(order.order_amount.toString());
+        user.dirty = true;
+
+        addDocClient(collectionClient(dbClient, 'deposits'), {
+          userId,
+          amount: parseFloat(order.order_amount.toString()),
+          transactionId: order_id,
+          status: 'completed',
+          method: 'cashfree',
+          timestamp: serverTimestampClient()
+        }).catch(() => {});
+
+        return res.json({ success: true, newBalance: user.balance });
+      }
+      
+      res.status(400).json({ error: "Payment not completed" });
+    } catch (e: any) {
+      console.error("[CASHFREE] Verification failed:", e.response?.data || e.message);
+      res.status(500).json({ error: "Verification error" });
+    }
+  });
+
   // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
@@ -605,7 +545,7 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Live Domain: https://jalwa369.com`);
   });

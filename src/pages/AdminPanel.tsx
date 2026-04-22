@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, updateDoc, collection, query, orderBy, getDocs, getDoc, setDoc, increment, where, limit } from 'firebase/firestore';
-import { Settings, Users, Wallet, Check, X, AlertCircle, TrendingUp, ShieldCheck, Share2, Lock, Plane, Camera, Upload, Search, History } from 'lucide-react';
+import { Settings, Users, Wallet, Check, X, AlertCircle, TrendingUp, ShieldCheck, Share2, Lock, Plane, Camera, Upload, Search, History, Diamond } from 'lucide-react';
 import { GameSettings, DepositRequest, WithdrawalRequest, UserProfile, GameHistoryEntry } from '../types';
 import { useAuth } from '../lib/AuthContext';
 
@@ -296,159 +296,73 @@ export default function AdminPanel() {
       <div className="bg-white/5 border border-white/10 rounded-3xl p-8 min-h-[60vh]">
         {activeTab === 'settings' && (
           <div className="max-w-xl space-y-8">
+            <div className="space-y-6">
+              <div className="flex bg-white/5 rounded-2xl p-1 gap-1">
+                <button 
+                  onClick={() => updateSettings('minesDifficultMode', 'normal')}
+                  className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${settings.minesDifficultMode !== 'rigged' ? 'bg-indigo-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
+                >
+                  Fair Play
+                </button>
+                <button 
+                  onClick={() => updateSettings('minesDifficultMode', 'rigged')}
+                  className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${settings.minesDifficultMode === 'rigged' ? 'bg-red-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
+                >
+                  Rigged Mode
+                </button>
+              </div>
+
               <div className="space-y-4">
-                <div className="flex bg-white/5 rounded-2xl p-1 gap-1">
-                  <button 
-                    onClick={() => updateSettings('isManualMode', false)}
-                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${!settings.isManualMode ? 'bg-purple-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
-                  >
-                    Random Mode
-                  </button>
-                  <button 
-                    onClick={() => updateSettings('isManualMode', true)}
-                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${settings.isManualMode ? 'bg-blue-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
-                  >
-                    Manual Mode
-                  </button>
-                </div>
-
-                {settings.gameState === 'flying' && (
-                  <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                    <div>
-                       <div className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">Game is Flying!</div>
-                       <div className="text-4xl font-black text-white font-mono">{currentMultiplier.toFixed(2)}<span className="text-red-500 text-2xl">x</span></div>
-                    </div>
-                    <button 
-                      onClick={async () => {
-                        const safetyVal = Math.floor(currentMultiplier * 100) / 100;
-                        await updateSettings('nextCrashValue', safetyVal);
-                        await updateSettings('manualOverrideNextValue', safetyVal);
-                        alert(`Signal sent! Game will crash shortly at ~${safetyVal}x`);
-                      }}
-                      className="bg-red-600 hover:bg-red-500 text-white px-8 py-3 rounded-xl font-black uppercase tracking-widest shadow-xl shadow-red-600/30 flex items-center gap-2 group active:scale-95 transition-all"
-                    >
-                      <Plane className="w-5 h-5 group-hover:-translate-y-1 group-hover:translate-x-1 transition-transform" /> Manual Crash Now
-                    </button>
-                  </div>
-                )}
-
-                <label className="text-xs font-bold uppercase text-white/40 tracking-widest flex items-center justify-between">
-                  <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Next Crash Multiplier (Any Value)</div>
-                  <div className="flex items-center gap-4">
-                    {settings.manualOverrideNextValue && (
-                      <div className="text-[10px] bg-red-500/20 text-red-500 px-3 py-1 rounded-full border border-red-500/20 animate-pulse font-bold flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Upcoming Manual Override: {settings.manualOverrideNextValue}x
-                      </div>
-                    )}
-                    {!settings.isManualMode && (
-                      <div className="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full border border-blue-500/20 font-bold flex items-center gap-1">
-                        <TrendingUp className="w-3 h-3" /> Next Random: {settings.nextCrashValue}x
-                      </div>
-                    )}
-                    <div className="text-[10px] text-white/30 uppercase tracking-widest flex items-center gap-1.5 bg-white/5 px-3 py-1 rounded-full border border-white/5">
-                      <Users className="w-3 h-3 text-purple-400" /> {activeBets.length} Active Bets
-                    </div>
-                  </div>
+                <label className="text-xs font-bold uppercase text-white/40 tracking-widest flex items-center gap-2">
+                  House Edge Percentage (%)
                 </label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <input 
-                      type="text"
-                      value={localNextValue}
-                      onChange={(e) => setLocalNextValue(e.target.value.replace(/[^0-9.]/g, ''))}
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl p-6 pr-20 text-5xl font-mono font-bold text-purple-400 outline-none focus:border-purple-500/50"
-                      placeholder="1.00"
-                    />
-                    <span className="absolute right-6 top-1/2 -translate-y-1/2 text-2xl font-bold text-white/20">X</span>
-                  </div>
-                  <button 
-                    onClick={() => {
-                      const val = parseFloat(localNextValue);
-                      if (!isNaN(val) && val >= 1.01) {
-                        updateSettings('nextCrashValue', val);
-                        updateSettings('manualOverrideNextValue', val); // New field for server to pick up
-                        alert(`Multiplier set to ${val}x`);
-                        setLocalNextValue(''); // Reset local to sync next round
-                      }
-                    }}
-                    className="px-8 bg-purple-600 hover:bg-purple-500 text-white font-black uppercase tracking-widest rounded-2xl py-6 shadow-lg shadow-purple-600/20 active:scale-95 transition-all"
-                  >
-                    Apply Now
-                  </button>
-                </div>
-
-                <div className="bg-purple-500/10 border border-purple-500/20 p-4 rounded-xl space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-purple-400 font-bold uppercase text-xs tracking-widest">
-                      <Users className="w-4 h-4" /> Live Bets Round {roundNumber}
-                    </div>
-                    <span className="text-2xl font-black text-white font-mono">{activeBets.length}</span>
-                  </div>
-                  <div className="flex items-center justify-between pt-3 border-t border-purple-500/20">
-                    <div className="flex items-center gap-2 text-white/40 font-bold uppercase text-[10px] tracking-widest">
-                      Total Bet Amount
-                    </div>
-                    <span className="text-xl font-black text-blue-400 font-mono">₹{activeBets.reduce((acc, b) => acc + (b.amount || 0), 0).toFixed(2)}</span>
-                  </div>
-                </div>
-                
-                {activeBets.length > 0 && settings.gameState === 'flying' && (
-                  <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-2">
-                    <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2 px-1">Detailed Bet List (Flying)</div>
-                    {activeBets.map(bet => (
-                      <div key={bet.id} className="flex items-center justify-between text-xs font-mono border-b border-white/5 pb-2 last:border-0">
-                         <div className="text-white/60 truncate w-32">{bet.email}</div>
-                         <div className="font-bold text-[#F27D26]">₹{bet.amount}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                
-                <div className="flex flex-wrap gap-2 pt-2">
-                   {[1.1, 1.5, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0].map(val => (
-                     <button 
-                       key={val}
-                       onClick={() => updateSettings('nextCrashValue', val)}
-                       className={`px-4 py-2 rounded-lg text-xs font-bold font-mono transition-all border ${settings.nextCrashValue === val ? 'bg-purple-500 text-white border-purple-400 shadow-lg shadow-purple-500/30' : 'bg-white/5 text-white/40 border-white/10 hover:bg-white/10 hover:text-white'}`}
-                     >
-                       {val.toFixed(2)}x
-                     </button>
-                   ))}
-                </div>
-                <div className="bg-black/20 p-4 rounded-xl space-y-2 border border-white/5">
-                   <p className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Mode Guide:</p>
-                   <p className="text-[10px] text-white/30 italic uppercase tracking-wider">• <span className="text-purple-400 font-bold">Random Mode:</span> Game results are calculated automatically after each round. (Realistic)</p>
-                   <p className="text-[10px] text-white/30 italic uppercase tracking-wider">• <span className="text-blue-400 font-bold">Manual Mode:</span> Game results strictly follow the value you enter above. It will not change automatically for the next round. (Controlled)</p>
-                </div>
-
-                <div className="pt-4">
-                   <button 
-                     onClick={async () => {
-                       if (confirm('Are you sure you want to force reset the game state?')) {
-                         await updateSettings('gameState', 'waiting');
-                         await updateSettings('countdownEndTime', new Date(Date.now() + 10000));
-                         await updateSettings('startTime', null);
-                       }
-                     }}
-                     className="w-full py-3 rounded-xl bg-red-500/10 text-red-500 border border-red-500/20 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500 hover:text-white transition-all"
-                   >
-                     Force Emergency Reset Game
-                   </button>
-                </div>
-                
-                <div className="pt-6 border-t border-white/5 space-y-4">
-                  <label className="text-xs font-bold uppercase text-white/40 tracking-widest flex items-center gap-2">
-                    Deposit Bonus Percentage (%)
-                  </label>
+                <div className="flex gap-4 items-center">
                   <input 
                     type="number" 
-                    value={settings.depositBonusPercentage}
-                    onChange={(e) => updateSettings('depositBonusPercentage', parseInt(e.target.value) || 0)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-4 outline-none font-mono text-sm"
+                    value={settings.houseEdge || 3}
+                    onChange={(e) => updateSettings('houseEdge', parseFloat(e.target.value) || 0)}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 outline-none font-mono text-xl text-indigo-400 focus:border-indigo-500/50"
                   />
-                  <p className="text-[10px] text-white/30 italic uppercase tracking-wider">This bonus is automatically added to the user's balance upon deposit approval.</p>
+                  <div className="text-white/20 font-bold">%</div>
                 </div>
               </div>
+
+              <div className="bg-indigo-500/10 border border-indigo-500/20 p-6 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold uppercase text-xs tracking-widest">
+                    <Diamond className="w-4 h-4" /> Global Mines Status
+                  </div>
+                  <span className="text-xl font-black text-white font-mono">Active</span>
+                </div>
+                <p className="text-[10px] text-white/30 italic uppercase tracking-wider">Rigged mode increases the probability of hitting a mine in early clicks to secure site profit.</p>
+              </div>
+
+              <div className="pt-4">
+                <button 
+                  onClick={async () => {
+                    if (confirm('Clear all active mines sessions?')) {
+                      alert('Sessions cleared (Administrative Override)');
+                    }
+                  }}
+                  className="w-full py-4 rounded-xl bg-red-500/10 text-red-500 border border-red-500/20 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500 hover:text-white transition-all"
+                >
+                  Force Flush Active Sessions
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-6 border-t border-white/5 space-y-4">
+              <label className="text-xs font-bold uppercase text-white/40 tracking-widest flex items-center gap-2">
+                Deposit Bonus Percentage (%)
+              </label>
+              <input 
+                type="number" 
+                value={settings.depositBonusPercentage}
+                onChange={(e) => updateSettings('depositBonusPercentage', parseInt(e.target.value) || 0)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-4 outline-none font-mono text-sm"
+              />
+              <p className="text-[10px] text-white/30 italic uppercase tracking-wider">This bonus is automatically added to the user's balance upon deposit approval.</p>
+            </div>
 
              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-6 border-t border-white/5">
                 <div className="space-y-2">

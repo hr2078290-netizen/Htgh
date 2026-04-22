@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile } from '../types';
 
@@ -8,9 +8,15 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  refreshProfile: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, profile: null, loading: true });
+const AuthContext = createContext<AuthContextType>({ 
+  user: null, 
+  profile: null, 
+  loading: true,
+  refreshProfile: async () => {} 
+});
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -32,7 +38,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const profileRef = doc(db, 'users', u.uid);
         unsubscribeProfile = onSnapshot(profileRef, async (docSnap) => {
           if (docSnap.exists()) {
-            setProfile(docSnap.data() as UserProfile);
+            const data = docSnap.data() as UserProfile;
+            // Ensure referral code exists for legacy users
+            if (!data.referralCode) {
+              const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+              await updateDoc(profileRef, {
+                referralCode,
+                referralBalance: data.referralBalance ?? 0,
+                referralEarnings: data.referralEarnings ?? 0
+              });
+            }
+            setProfile(data);
             setLoading(false);
           } else {
             const newProfile: UserProfile = {
@@ -65,8 +81,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  const refreshProfile = async () => {
+    if (user) {
+      const profileRef = doc(db, 'users', user.uid);
+      const docSnap = await getDoc(profileRef);
+      if (docSnap.exists()) {
+        setProfile(docSnap.data() as UserProfile);
+      }
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading }}>
+    <AuthContext.Provider value={{ user, profile, loading, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

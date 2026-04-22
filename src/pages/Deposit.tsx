@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { useAuth } from '../lib/AuthContext';
 import { doc, onSnapshot, addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { Wallet, QrCode, ClipboardCheck, AlertCircle, Camera, Check as CheckIcon, CreditCard, ChevronRight, Zap } from 'lucide-react';
+import { Wallet, QrCode, ClipboardCheck, AlertCircle, Camera, Check as CheckIcon, CreditCard, ChevronRight, Zap, Send } from 'lucide-react';
 import { GameSettings } from '../types';
 
 export default function Deposit() {
@@ -12,7 +12,7 @@ export default function Deposit() {
   const [txnId, setTxnId] = useState('');
   const [proofUrl, setProofUrl] = useState('');
   const [success, setSuccess] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'razorpay' | 'manual'>('razorpay');
+  const [paymentMode, setPaymentMode] = useState<'razorpay' | 'manual' | 'cashfree'>('cashfree');
   const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
@@ -21,7 +21,46 @@ export default function Deposit() {
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.async = true;
     document.body.appendChild(script);
+
+    // Load Cashfree Script
+    const cfScript = document.createElement("script");
+    cfScript.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+    cfScript.async = true;
+    document.body.appendChild(cfScript);
   }, []);
+
+  const handleCashfreePayment = async () => {
+    if (!user || !amount || parseFloat(amount) < 100) {
+      alert("Minimum deposit amount is ₹100");
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = await fetch("/api/payment/cashfree/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: parseFloat(amount), userId: user.uid })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create Cashfree order");
+
+      const cashfree = new (window as any).Cashfree({
+        mode: "production" // or "sandbox"
+      });
+
+      await cashfree.checkout({
+        paymentSessionId: data.payment_session_id,
+        redirectTarget: "_self" // Use _self for better iframe compatibility
+      });
+
+    } catch (e: any) {
+      alert(e.message || "Cashfree payment failed");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   useEffect(() => {
     return onSnapshot(doc(db, 'settings', 'config'), (snap) => {
@@ -142,18 +181,33 @@ export default function Deposit() {
         {/* Payment Modes Selector */}
         <div className="md:col-span-4 space-y-4">
            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40 px-2">Select Payment Method</h3>
+           
            <button 
-             onClick={() => setPaymentMode('razorpay')}
-             className={`w-full p-4 rounded-2xl border transition-all flex items-center gap-4 ${paymentMode === 'razorpay' ? 'bg-green-500/10 border-green-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+             onClick={() => setPaymentMode('cashfree')}
+             className={`w-full p-4 rounded-2xl border transition-all flex items-center gap-4 ${paymentMode === 'cashfree' ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
            >
-              <div className={`p-2 rounded-lg ${paymentMode === 'razorpay' ? 'bg-green-500 text-black' : 'bg-white/10 text-white/40'}`}>
+              <div className={`p-2 rounded-lg ${paymentMode === 'cashfree' ? 'bg-indigo-500 text-white' : 'bg-white/10 text-white/40'}`}>
                 <Zap className="w-5 h-5" />
               </div>
               <div className="text-left">
-                <div className="text-xs font-black uppercase text-white">Instant Pay</div>
-                <div className="text-[10px] font-bold text-white/40">Automated • UPI / Card</div>
+                <div className="text-xs font-black uppercase text-white">Cashfree</div>
+                <div className="text-[10px] font-bold text-white/40">UPI / Cards / Netbanking</div>
               </div>
-              {paymentMode === 'razorpay' && <Check className="w-4 h-4 text-green-500 ml-auto" />}
+              {paymentMode === 'cashfree' && <CheckIcon className="w-4 h-4 text-indigo-500 ml-auto" />}
+           </button>
+
+           <button 
+             onClick={() => setPaymentMode('razorpay')}
+             className={`w-full p-4 rounded-2xl border transition-all flex items-center gap-4 ${paymentMode === 'razorpay' ? 'bg-blue-500/10 border-blue-500/50' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+           >
+              <div className={`p-2 rounded-lg ${paymentMode === 'razorpay' ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/40'}`}>
+                <Zap className="w-5 h-5" />
+              </div>
+              <div className="text-left">
+                <div className="text-xs font-black uppercase text-white">Razorpay</div>
+                <div className="text-[10px] font-bold text-white/40">Instant • Trusted</div>
+              </div>
+              {paymentMode === 'razorpay' && <CheckIcon className="w-4 h-4 text-blue-500 ml-auto" />}
            </button>
 
            <button 
@@ -165,10 +219,29 @@ export default function Deposit() {
               </div>
               <div className="text-left">
                 <div className="text-xs font-black uppercase text-white">Manual UPI</div>
-                <div className="text-[10px] font-bold text-white/40">QR Scan • Manual Verification</div>
+                <div className="text-[10px] font-bold text-white/40">Offline verification</div>
               </div>
-              {paymentMode === 'manual' && <Check className="w-4 h-4 text-[#F27D26] ml-auto" />}
+              {paymentMode === 'manual' && <CheckIcon className="w-4 h-4 text-[#F27D26] ml-auto" />}
            </button>
+
+           <a 
+              href="https://t.me/Jalwa369deposit"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full p-4 rounded-2xl border bg-cyan-500/10 border-cyan-500/30 hover:bg-cyan-500/20 transition-all flex items-center gap-4 group"
+            >
+               <div className="p-2 rounded-lg bg-cyan-500 text-white shadow-lg shadow-cyan-500/30 group-hover:scale-110 transition-transform">
+                 <Send className="w-5 h-5" />
+               </div>
+               <div className="text-left">
+                 <div className="text-xs font-black uppercase text-white flex items-center gap-2">
+                   Fast Deposit
+                   <span className="bg-cyan-500 text-black text-[7px] px-1.5 py-0.5 rounded-full font-black uppercase">Support</span>
+                 </div>
+                 <div className="text-[10px] font-bold text-white/40">Direct via Telegram</div>
+               </div>
+               <ChevronRight className="w-4 h-4 text-cyan-500 ml-auto group-hover:translate-x-1 transition-transform" />
+            </a>
         </div>
 
         {/* Action Panel */}
@@ -177,27 +250,27 @@ export default function Deposit() {
             {success ? (
               <div className="text-center py-10">
                 <div className="bg-green-500 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-green-500/30">
-                  <Check className="w-10 h-10 text-black" />
+                  <CheckIcon className="w-10 h-10 text-black" />
                 </div>
                 <h3 className="text-2xl font-black uppercase italic tracking-tighter text-white">Credits Added!</h3>
                 <p className="text-white/40 text-sm mt-3 font-medium uppercase tracking-widest max-w-xs mx-auto">
-                  {paymentMode === 'razorpay' 
-                    ? "Successfully recharged! Your balance has been updated automatically." 
-                    : "Request submitted! Admin will verify and add balance within 15 mins."}
+                  {paymentMode === 'manual' 
+                    ? "Request submitted! Admin will verify and add balance within 15 mins."
+                    : "Successfully recharged! Your balance has been updated automatically."}
                 </p>
                 <button onClick={() => setSuccess(false)} className="mt-10 text-green-500 font-bold uppercase text-xs tracking-[0.2em] border-b border-green-500/50 pb-1">Deposit More</button>
               </div>
-            ) : paymentMode === 'razorpay' ? (
+            ) : (paymentMode === 'razorpay' || paymentMode === 'cashfree') ? (
               <div className="space-y-6">
-                 <div className="bg-gradient-to-br from-green-500/10 to-transparent p-5 rounded-2xl border border-green-500/20">
-                    <div className="text-[10px] font-bold uppercase text-green-500 tracking-widest mb-4">Enter Recharge Amount</div>
+                 <div className="bg-gradient-to-br from-indigo-500/10 to-transparent p-5 rounded-2xl border border-indigo-500/20">
+                    <div className="text-[10px] font-bold uppercase text-indigo-400 tracking-widest mb-4">Enter Recharge Amount</div>
                     <div className="relative">
                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-white/20 italic">₹</span>
                        <input 
                          type="number"
                          value={amount}
                          onChange={(e) => setAmount(e.target.value)}
-                         className="w-full bg-black/40 border border-white/10 rounded-xl py-5 pl-12 pr-4 text-3xl font-mono font-black text-white outline-none focus:border-green-500 transition-all"
+                         className="w-full bg-black/40 border border-white/10 rounded-xl py-5 pl-12 pr-4 text-3xl font-mono font-black text-white outline-none focus:border-indigo-500 transition-all"
                          placeholder="500"
                        />
                     </div>
@@ -216,19 +289,19 @@ export default function Deposit() {
 
                  <div className="space-y-4">
                     <div className="flex items-start gap-3 p-4 rounded-xl bg-white/5 border border-white/5">
-                       <CreditCard className="w-5 h-5 text-green-500 shrink-0" />
+                       <CreditCard className="w-5 h-5 text-indigo-400 shrink-0" />
                        <div>
-                          <div className="text-[10px] font-black uppercase text-white tracking-widest">Supported Modes</div>
-                          <div className="text-[10px] text-white/40 mt-1">Google Pay, PhonePe, Paytm, Cards, and Netbanking</div>
+                          <div className="text-[10px] font-black uppercase text-white tracking-widest">Secure Checkout</div>
+                          <div className="text-[10px] text-white/40 mt-1">SSL Encrypted • Instant Settlement</div>
                        </div>
                     </div>
                     
                     <button 
                       disabled={isProcessing || !amount || parseFloat(amount) < 100}
-                      onClick={handleRazorpayPayment}
-                      className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-30 disabled:grayscale text-black font-black uppercase tracking-widest py-5 rounded-2xl shadow-xl shadow-green-500/20 transition-all flex items-center justify-center gap-3 active:scale-95 group"
+                      onClick={paymentMode === 'cashfree' ? handleCashfreePayment : handleRazorpayPayment}
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:grayscale text-white font-black uppercase tracking-widest py-5 rounded-2xl shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center gap-3 active:scale-95 group"
                     >
-                      {isProcessing ? 'Connecting...' : <><Zap className="w-5 h-5 fill-current" /> Pay Now <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>}
+                      {isProcessing ? 'Processing...' : <><Zap className="w-5 h-5 fill-current" /> Pay with {paymentMode === 'cashfree' ? 'Cashfree' : 'Razorpay'} <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>}
                     </button>
                  </div>
               </div>
