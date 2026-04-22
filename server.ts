@@ -95,6 +95,12 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Request logger helper
+  app.use((req, res, next) => {
+    console.log(`[API] ${req.method} ${req.url}`);
+    next();
+  });
+
   // Mines API
   app.post("/api/mines/start", async (req, res) => {
     const { userId, betAmount, numMines } = req.body;
@@ -563,8 +569,14 @@ async function startServer() {
   });
 
   // API routes
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  app.get("/api/health", async (req, res) => {
+    try {
+      const configRef = docClient(dbClient, 'settings', 'config');
+      await getDocClient(configRef);
+      res.json({ status: "ok", firestore: "connected" });
+    } catch (e: any) {
+      res.json({ status: "ok", firestore: "error", message: e.message });
+    }
   });
 
   // Vite middleware for development

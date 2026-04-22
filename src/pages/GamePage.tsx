@@ -61,6 +61,11 @@ export default function MinesGame() {
       return;
     }
 
+    if (!profile?.uid) {
+      alert("User profile not loaded. Please refresh or log in again.");
+      return;
+    }
+
     const config = getNetworkConfig();
     try {
       const res = await fetch(`${config.apiBase}/mines/start`, {
@@ -82,8 +87,9 @@ export default function MinesGame() {
       } else {
         alert(data.error);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert("Failed to start game: " + (e.message || "Unknown error"));
     }
   };
 
@@ -133,8 +139,9 @@ export default function MinesGame() {
           }
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert("Error revealing tile: " + (e.message || "Unknown error"));
     }
   };
 
@@ -162,8 +169,9 @@ export default function MinesGame() {
         setTiles(finalTiles);
         refreshProfile();
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert("Cashout error: " + (e.message || "Unknown error"));
     }
   };
 
@@ -372,6 +380,18 @@ export default function MinesGame() {
                </div>
                
                <div className="flex-1 p-4 space-y-2 overflow-y-auto">
+                  <Link to="/profile" onClick={() => setIsMenuOpen(false)} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all">
+                    <User className="w-4 h-4 text-[#F27D26]" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-white">My Profile</span>
+                  </Link>
+                  <Link to="/deposit" onClick={() => setIsMenuOpen(false)} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-green-500/10 transition-all text-green-500">
+                    <Wallet className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-wider">Deposit</span>
+                  </Link>
+                  <Link to="/withdrawal" onClick={() => setIsMenuOpen(false)} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-yellow-500/10 transition-all text-yellow-500">
+                    <TrendingUp className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-wider">Withdraw</span>
+                  </Link>
                   <button onClick={() => { setIsHistoryModalOpen(true); setIsMenuOpen(false); }} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all">
                     <History className="w-4 h-4 text-white/40" />
                     <span className="text-xs font-bold uppercase tracking-wider">History</span>
