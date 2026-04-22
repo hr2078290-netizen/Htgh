@@ -94,10 +94,13 @@ async function startServer() {
   };
 
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
   // Request logger helper
   app.use((req, res, next) => {
-    console.log(`[API] ${req.method} ${req.url}`);
+    if (req.url.startsWith('/api')) {
+      console.log(`[API_REQ] ${req.method} ${req.url}`);
+    }
     next();
   });
 
@@ -593,6 +596,9 @@ async function startServer() {
     
     // Fallback all other requests to index.html for React Router
     app.get("*", (req, res) => {
+      if (req.url.startsWith('/api')) {
+        console.warn(`[API_FALLBACK] API request hit HTML fallback: ${req.method} ${req.url}`);
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
