@@ -4,6 +4,7 @@ import { auth } from '../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { Menu, User, X, LogOut, Wallet, ShieldAlert, History, Volume2, VolumeX, Music, TrendingUp, HelpCircle, BookOpen, FileText, ShieldCheck, Diamond, Bomb, Trophy, Info } from 'lucide-react';
 import { useAuth } from '../lib/AuthContext';
+import HistoryModal from '../components/HistoryModal';
 
 const getNetworkConfig = () => {
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('asia-southeast1.run.app');
@@ -400,6 +401,11 @@ export default function MinesGame() {
           </>
         )}
       </AnimatePresence>
+
+      <HistoryModal 
+        isOpen={isHistoryModalOpen} 
+        onClose={() => setIsHistoryModalOpen(false)} 
+      />
 
       <footer className="p-4 text-center text-white/20 text-[10px] uppercase font-bold tracking-[0.5em] pb-safe">
         Provably Fair Gaming • Jalwa369

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { Plane, Calendar, Shield, Wallet, Users, Plus, History, ArrowDownLeft, ArrowUpRight, Clock, Zap, User, Edit2, Check } from 'lucide-react';
+import { Diamond, Calendar, Shield, Wallet, Users, Plus, History, ArrowDownLeft, ArrowUpRight, Clock, Zap, User, Edit2, Check, ShieldAlert, Share2, Copy } from 'lucide-react';
 
 export default function Profile() {
   const { profile, user } = useAuth();
@@ -95,7 +95,7 @@ export default function Profile() {
         <div className="px-3 sm:px-8 pb-6 -mt-8 relative z-10">
           <div className="flex flex-col md:flex-row items-center md:items-end gap-3 mb-6 text-center md:text-left">
             <div className="w-16 h-16 rounded-[1.2rem] bg-[#0a0604] border-[4px] border-[#1b1c1d] overflow-hidden flex items-center justify-center shadow-xl">
-               <Plane className="w-8 h-8 text-[#F27D26] transform -rotate-45 drop-shadow-[0_0_15px_rgba(242,125,38,0.5)]" />
+               <Diamond className="w-8 h-8 text-[#F27D26] drop-shadow-[0_0_15px_rgba(242,125,38,0.5)]" />
             </div>
             <div className="flex-1 pb-1">
                <div className="flex items-center justify-center md:justify-start gap-2">
@@ -141,7 +141,10 @@ export default function Profile() {
                     <Shield className="w-2.5 h-2.5 text-[#F27D26]"/> {profile.isAdmin ? 'Admin' : 'Member'}
                  </span>
                  <span className="flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
-                    <Calendar className="w-2.5 h-2.5 text-purple-400"/> Joined {new Date(profile.createdAt.seconds * 1000).toLocaleDateString()}
+                    <User className="w-2.5 h-2.5 text-blue-400"/> ID: {profile.numericId || '---'}
+                 </span>
+                 <span className="flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                    <Calendar className="w-2.5 h-2.5 text-purple-400"/> Joined {new Date(profile.createdAt?.seconds * 1000 || Date.now()).toLocaleDateString()}
                  </span>
                </div>
             </div>
@@ -153,7 +156,19 @@ export default function Profile() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            {profile.isAdmin && (
+              <Link to="/admin" className="flex items-center justify-between p-4 rounded-xl bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all group relative overflow-hidden">
+                <div className="relative z-10">
+                  <div className="text-[8px] font-black uppercase text-purple-500 tracking-widest mb-0.5">Control Center</div>
+                  <div className="text-base font-black text-white uppercase italic">Admin Panel</div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-purple-500 text-white shadow-lg shadow-purple-500/30 group-hover:scale-110 transition-transform relative z-10">
+                  <Diamond className="w-4 h-4" />
+                </div>
+              </Link>
+            )}
+            
             <Link to="/deposit" className="flex items-center justify-between p-4 rounded-xl bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-all group relative overflow-hidden">
               <div className="relative z-10">
                 <div className="text-[8px] font-black uppercase text-green-500 tracking-widest mb-0.5">Cash In</div>
@@ -192,22 +207,41 @@ export default function Profile() {
                    <h3 className="text-[9px] font-bold uppercase tracking-widest mb-3 flex items-center gap-2">
                       <Users className="w-3 h-3 text-purple-500" /> Referral
                    </h3>
-                   <div className="space-y-3">
-                      <div>
-                         <div className="text-[8px] text-white/40 uppercase font-bold mb-1">My Promo Code</div>
-                         <div className="flex items-center gap-2">
-                           <div className="flex-1 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg font-mono font-bold text-base text-purple-400">
-                             {profile.referralCode}
-                           </div>
-                           <button 
-                             onClick={() => {
-                               navigator.clipboard.writeText(profile.referralCode || '');
-                               alert('Code copied!');
-                             }}
-                             className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/10"
-                           >
-                             <Plus className="w-3 h-3 rotate-45" />
-                           </button>
+                   <div className="space-y-4">
+                      <div className="flex flex-col gap-3">
+                         <div>
+                            <div className="text-[8px] text-white/40 uppercase font-bold mb-1">Referral Link</div>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg font-mono font-bold text-[10px] text-pink-400 truncate">
+                                https://jalwa369.com/register?ref={profile.referralCode}
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(`https://jalwa369.com/register?ref=${profile.referralCode}`);
+                                  alert('Link copied!');
+                                }}
+                                className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/10"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            </div>
+                         </div>
+                         <div>
+                            <div className="text-[8px] text-white/40 uppercase font-bold mb-1">My Promo Code</div>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg font-mono font-bold text-base text-purple-400">
+                                {profile.referralCode}
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(profile.referralCode || '');
+                                  alert('Code copied!');
+                                }}
+                                className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/10"
+                              >
+                                <Plus className="w-3 h-3 rotate-45" />
+                              </button>
+                            </div>
                          </div>
                       </div>
                       <div className="flex justify-between items-end">
@@ -237,12 +271,12 @@ export default function Profile() {
                    </div>
 
                    <a 
-                     href="https://t.me/Aviatorclub369" 
+                     href="https://t.me/Jalwa369deposit" 
                      target="_blank" 
                      rel="noopener noreferrer"
                      className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 transition-all font-black uppercase text-[8px] tracking-widest group"
                    >
-                     <Zap className="w-3 h-3 group-hover:rotate-12 transition-transform" /> Customer Care
+                     <Zap className="w-3 h-3 group-hover:rotate-12 transition-transform" /> Fast Deposit Support
                    </a>
                 </div>
              </div>

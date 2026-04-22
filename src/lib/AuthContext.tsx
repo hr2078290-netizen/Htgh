@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp, updateDoc, runTransaction } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile } from '../types';
 
@@ -39,30 +39,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         unsubscribeProfile = onSnapshot(profileRef, async (docSnap) => {
           if (docSnap.exists()) {
             const data = docSnap.data() as UserProfile;
+            let needsUpdate = false;
+            const updatePayload: any = {};
+
             // Ensure referral code exists for legacy users
             if (!data.referralCode) {
-              const referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-              await updateDoc(profileRef, {
-                referralCode,
-                referralBalance: data.referralBalance ?? 0,
-                referralEarnings: data.referralEarnings ?? 0
-              });
+              updatePayload.referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+              updatePayload.referralBalance = data.referralBalance ?? 0;
+              updatePayload.referralEarnings = data.referralEarnings ?? 0;
+              needsUpdate = true;
             }
+
+            // Ensure numericId exists for legacy users
+            if (!data.numericId) {
+              try {
+                const nextId = await runTransaction(db, async (transaction) => {
+                  const statsRef = doc(db, 'settings', 'stats');
+                  const statsSnap = await transaction.get(statsRef);
+                  let currentId = 251500;
+                  if (statsSnap.exists()) {
+                    currentId = (statsSnap.data().lastNumericId || 251500) + 1;
+                  }
+                  transaction.set(statsRef, { lastNumericId: currentId }, { merge: true });
+                  return currentId;
+                });
+                updatePayload.numericId = nextId;
+                needsUpdate = true;
+              } catch (e) {
+                console.error("Error generating legacy numericId:", e);
+              }
+            }
+
+            if (needsUpdate) {
+              await updateDoc(profileRef, updatePayload);
+            }
+
             setProfile(data);
             setLoading(false);
           } else {
-            const newProfile: UserProfile = {
-              uid: u.uid,
-              email: u.email || '',
-              balance: 50000, // Give starter balance for testing
-              referralBalance: 0,
-              isAdmin: u.email === 'hr2078290@gmail.com', // Auto-grant admin for user request
-              status: 'active',
-              createdAt: serverTimestamp(),
-              referralCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
-              referralEarnings: 0
-            };
+            // New user registration
             try {
+              const numericId = await runTransaction(db, async (transaction) => {
+                const statsRef = doc(db, 'settings', 'stats');
+                const statsSnap = await transaction.get(statsRef);
+                let currentId = 251500;
+                if (statsSnap.exists()) {
+                  currentId = (statsSnap.data().lastNumericId || 251500) + 1;
+                }
+                transaction.set(statsRef, { lastNumericId: currentId }, { merge: true });
+                return currentId;
+              });
+
+              const newProfile: UserProfile = {
+                uid: u.uid,
+                email: u.email || '',
+                balance: 50000, 
+                referralBalance: 0,
+                isAdmin: u.email === 'hr2078290@gmail.com', 
+                status: 'active',
+                createdAt: serverTimestamp(),
+                referralCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
+                referralEarnings: 0,
+                numericId
+              };
               await setDoc(profileRef, newProfile);
             } catch (err) {
               console.error("Error creating profile:", err);

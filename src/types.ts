@@ -10,6 +10,7 @@ export interface UserProfile {
   referralCode: string;
   referredBy?: string;
   referralEarnings: number;
+  numericId?: number;
 }
 
 export interface DepositRequest {
@@ -59,4 +60,14 @@ export interface GameSettings {
 export interface GameHistoryEntry {
   value: number;
   timestamp: any;
+}
+
+export interface BetHistoryEntry {
+  game: string;
+  bet: number;
+  mines?: number;
+  multiplier: number;
+  payout: number;
+  status: 'won' | 'lost';
+  timestamp: number;
 }

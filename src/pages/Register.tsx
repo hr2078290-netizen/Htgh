@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
-import { Plane, Mail, Lock, UserPlus, Eye, EyeOff, Users } from 'lucide-react';
+import { Diamond, Mail, Lock, UserPlus, Eye, EyeOff, Users } from 'lucide-react';
 import { UserProfile } from '../types';
 
 export default function Register() {
@@ -77,7 +77,7 @@ export default function Register() {
     <div className="min-h-[80vh] flex items-center justify-center">
       <div className="w-full max-w-md p-8 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xl">
         <div className="flex flex-col items-center mb-8">
-          <Plane className="w-12 h-12 text-[#F27D26] transform -rotate-45 mb-4" />
+          <Diamond className="w-12 h-12 text-[#F27D26] mb-4" />
           <h1 className="text-3xl font-bold tracking-tight">Join the Club</h1>
           <p className="text-white/40 text-sm mt-1 uppercase tracking-widest font-medium">Create your pilot account</p>
         </div>

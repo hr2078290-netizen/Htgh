@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { auth } from '../lib/firebase';
-import { Plane, LogOut, User, Wallet, ShieldAlert, Plus, History } from 'lucide-react';
+import { Diamond, LogOut, User, Wallet, ShieldAlert, Plus, History } from 'lucide-react';
 
 export default function Navbar() {
   const { user, profile } = useAuth();
@@ -18,8 +18,8 @@ export default function Navbar() {
     <nav className="border-b border-white/10 bg-[#0a0502]/80 backdrop-blur-md sticky top-0 z-50">
       <div className="w-full max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-2 group">
-          <Plane className="w-8 h-8 text-[#F27D26] transform -rotate-45 group-hover:scale-110 transition-transform" />
-          <span className="text-xl font-bold tracking-tighter uppercase italic">Aviator<span className="text-[#F27D26]">Club</span></span>
+          <Diamond className="w-8 h-8 text-[#F27D26] group-hover:scale-110 transition-transform" />
+          <span className="text-xl font-bold tracking-tighter uppercase italic">Jalwa369<span className="text-[#F27D26]">Mines</span></span>
         </Link>
         
         <div className="flex items-center gap-3 sm:gap-6">

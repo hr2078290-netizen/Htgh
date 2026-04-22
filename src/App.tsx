@@ -2,7 +2,6 @@ import React from 'react';
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import GamePage from "./pages/GamePage";
-import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Profile from "./pages/Profile";
@@ -31,7 +30,7 @@ export default function App() {
       <div className="min-h-screen bg-[#050505] text-[#E4E3E0] font-sans selection:bg-[#F27D26] selection:text-white pb-20 sm:pb-0">
         <main className="w-full max-w-7xl mx-auto px-0 sm:px-4 py-0 sm:py-8">
           <Routes>
-            <Route path="/" element={<Landing />} />
+            <Route path="/" element={<Navigate to="/play" />} />
             <Route path="/play" element={<ProtectedRoute><GamePage /></ProtectedRoute>} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />

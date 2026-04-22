@@ -152,6 +152,20 @@ async function startServer() {
 
     if (game.mines.includes(tileIndex)) {
       // HIT MINE
+      const user = await getLedgerUser(userId);
+      const historyEntry = {
+        game: 'Mines',
+        bet: game.bet,
+        mines: game.numMines,
+        multiplier: 0,
+        payout: 0,
+        status: 'lost',
+        timestamp: Date.now()
+      };
+      user.recentBets.unshift(historyEntry);
+      user.recentBets = user.recentBets.slice(0, 50);
+      user.dirty = true;
+
       game.isGameOver = true;
       activeMinesGames.delete(userId);
       return res.json({
@@ -171,6 +185,19 @@ async function startServer() {
         const user = await getLedgerUser(userId);
         user.balance += winAmount;
         user.dirty = true;
+
+        const historyEntry = {
+          game: 'Mines',
+          bet: game.bet,
+          mines: game.numMines,
+          multiplier: game.multiplier,
+          payout: winAmount,
+          status: 'won',
+          timestamp: Date.now()
+        };
+        user.recentBets.unshift(historyEntry);
+        user.recentBets = user.recentBets.slice(0, 50);
+
         game.isGameOver = true;
         activeMinesGames.delete(userId);
 
@@ -210,6 +237,19 @@ async function startServer() {
       
       user.balance += winAmount;
       user.dirty = true;
+
+      const historyEntry = {
+        game: 'Mines',
+        bet: game.bet,
+        mines: game.numMines,
+        multiplier: game.multiplier,
+        payout: winAmount,
+        status: 'won',
+        timestamp: Date.now()
+      };
+      user.recentBets.unshift(historyEntry);
+      user.recentBets = user.recentBets.slice(0, 50);
+
       game.isGameOver = true;
       const finalMines = [...game.mines];
       activeMinesGames.delete(userId);

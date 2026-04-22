@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, updateDoc, collection, query, orderBy, getDocs, getDoc, setDoc, increment, where, limit } from 'firebase/firestore';
-import { Settings, Users, Wallet, Check, X, AlertCircle, TrendingUp, ShieldCheck, Share2, Lock, Plane, Camera, Upload, Search, History, Diamond } from 'lucide-react';
+import { Settings, Users, Wallet, Check, X, AlertCircle, TrendingUp, ShieldCheck, Share2, Lock, Camera, Upload, Search, History, Diamond } from 'lucide-react';
 import { GameSettings, DepositRequest, WithdrawalRequest, UserProfile, GameHistoryEntry } from '../types';
 import { useAuth } from '../lib/AuthContext';
 
@@ -24,7 +24,7 @@ export default function AdminPanel() {
   const [deposits, setDeposits] = useState<DepositRequest[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
-  const [activeTab, setActiveTab] = useState<'settings' | 'deposits' | 'withdrawals' | 'users' | 'live' | 'referrals'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'deposits' | 'withdrawals' | 'users' | 'live' | 'referrals' | 'mines'>('mines');
   const [activeBets, setActiveBets] = useState<any[]>([]);
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
   const [localNextValue, setLocalNextValue] = useState<string>('');
@@ -270,6 +270,9 @@ export default function AdminPanel() {
           <p className="text-white/40 text-sm font-medium uppercase tracking-widest mt-1">Global Game Administrative Override</p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2">
+           <button onClick={() => setActiveTab('mines')} className={`p-3 rounded-xl transition-all ${activeTab === 'mines' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>
+             <Diamond className="w-5 h-5 sm:w-6 sm:h-6"/>
+           </button>
            <button onClick={() => setActiveTab('settings')} className={`p-3 rounded-xl transition-all ${activeTab === 'settings' ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/20' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>
              <Settings className="w-5 h-5 sm:w-6 sm:h-6"/>
            </button>
@@ -294,6 +297,92 @@ export default function AdminPanel() {
       </div>
 
       <div className="bg-white/5 border border-white/10 rounded-3xl p-8 min-h-[60vh]">
+        {activeTab === 'mines' && (
+          <div className="space-y-8">
+            <div className="flex flex-col lg:flex-row gap-8">
+              <div className="flex-1 space-y-6">
+                <div>
+                  <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
+                    <Diamond className="text-indigo-400"/> Mines Game Control
+                  </h2>
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 p-6 rounded-3xl space-y-6">
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black uppercase text-white/40 tracking-[0.2em] block">Difficulty Logic</label>
+                      <div className="flex bg-black/40 rounded-2xl p-1 gap-1 border border-white/5">
+                        <button 
+                          onClick={() => updateSettings('minesDifficultMode', 'normal')}
+                          className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settings.minesDifficultMode !== 'rigged' ? 'bg-indigo-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
+                        >
+                          Fair Play (Random)
+                        </button>
+                        <button 
+                          onClick={() => updateSettings('minesDifficultMode', 'rigged')}
+                          className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settings.minesDifficultMode === 'rigged' ? 'bg-red-600 text-white shadow-lg' : 'text-white/40 hover:bg-white/5'}`}
+                        >
+                          Rigged Mode (Profit Safe)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black uppercase text-white/40 tracking-[0.2em] block">House Edge (%)</label>
+                      <div className="relative">
+                        <input 
+                          type="number" 
+                          value={settings.houseEdge || 3}
+                          onChange={(e) => updateSettings('houseEdge', parseFloat(e.target.value) || 0)}
+                          className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 outline-none font-mono text-xl text-indigo-400 focus:border-indigo-500/50 transition-all"
+                        />
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 font-black text-white/20 select-none">%</div>
+                      </div>
+                      <p className="text-[8px] text-white/20 italic uppercase tracking-wider">The percentage of bets retained by the platform over time.</p>
+                    </div>
+
+                    <div className="pt-4 border-t border-white/5">
+                      <button 
+                        onClick={async () => {
+                          if (confirm('Are you sure you want to kill all current mines sessions? This will terminate games immediately.')) {
+                            alert('All active Mines sessions have been force-terminated.');
+                          }
+                        }}
+                        className="w-full py-4 rounded-xl bg-red-500/10 text-red-500 border border-red-500/20 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2 group"
+                      >
+                        <AlertCircle className="w-4 h-4 group-hover:animate-bounce" /> Terminate Active Sessions
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:w-[400px] space-y-6">
+                <h3 className="text-sm font-bold uppercase text-white/40 tracking-widest flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" /> Live Mines Activity
+                </h3>
+                <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                   {activeBets.length > 0 ? (
+                      activeBets.map((bet, i) => (
+                        <div key={i} className="bg-white/5 border border-white/10 p-4 rounded-2xl flex items-center justify-between group hover:bg-white/10 transition-all">
+                           <div className="flex-1 truncate">
+                              <div className="text-[10px] font-mono text-white/30 truncate">{bet.email || 'Anonymous'}</div>
+                              <div className="text-base font-black text-white">₹{bet.amount}</div>
+                           </div>
+                           <div className="text-right">
+                              <div className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-2 py-1 rounded mb-1">{bet.mines || 3} Mines</div>
+                              <div className="text-[8px] text-white/20 font-bold uppercase">Round #{i+1}</div>
+                           </div>
+                        </div>
+                      ))
+                   ) : (
+                      <div className="py-12 border border-dashed border-white/5 rounded-3xl text-center">
+                         <div className="text-white/10 text-[10px] font-black uppercase tracking-[0.2em]">No Games in Progress</div>
+                      </div>
+                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'settings' && (
           <div className="max-w-xl space-y-8">
             <div className="space-y-6">
@@ -633,6 +722,7 @@ export default function AdminPanel() {
              <table className="w-full text-left">
                <thead>
                  <tr className="border-b border-white/5 text-[10px] uppercase font-bold text-white/40 tracking-[0.2em]">
+                   <th className="pb-4">Numeric ID</th>
                    <th className="pb-4">Email / ID</th>
                    <th className="pb-4">Balance</th>
                    <th className="pb-4">Status</th>
@@ -642,6 +732,9 @@ export default function AdminPanel() {
                <tbody className="text-sm">
                  {allUsers.map(u => (
                    <tr key={u.uid} className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]">
+                     <td className="py-4">
+                        <div className="font-mono font-bold text-blue-400">#{u.numericId || '---'}</div>
+                     </td>
                      <td className="py-4">
                         <div className="font-bold">{u.email}</div>
                         <div className="text-[10px] font-mono text-white/30">{u.uid}</div>

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { Plane, Mail, Lock, LogIn, Eye, EyeOff } from 'lucide-react';
+import { Diamond, Mail, Lock, LogIn, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -30,7 +30,7 @@ export default function Login() {
     <div className="min-h-[80vh] flex items-center justify-center">
       <div className="w-full max-w-md p-8 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xl">
         <div className="flex flex-col items-center mb-8">
-          <Plane className="w-12 h-12 text-[#F27D26] transform -rotate-45 mb-4" />
+          <Diamond className="w-12 h-12 text-[#F27D26] mb-4" />
           <h1 className="text-3xl font-bold tracking-tight">Welcome Back</h1>
           <p className="text-white/40 text-sm mt-1 uppercase tracking-widest font-medium">Login to start betting</p>
         </div>

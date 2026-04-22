@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Plane, Wallet, User, History, Users } from 'lucide-react';
+import { Diamond, Wallet, User, History, Users } from 'lucide-react';
 
 export default function MobileNav() {
   return (
@@ -10,24 +10,16 @@ export default function MobileNav() {
           to="/play" 
           className={({ isActive }) => `flex flex-col items-center gap-1 transition-all ${isActive ? 'text-[#f27d26] scale-110' : 'text-white/40'}`}
         >
-          <Plane className="w-5 h-5 flex-shrink-0" />
+          <Diamond className="w-5 h-5 flex-shrink-0" />
           <span className="text-[9px] font-bold uppercase tracking-tighter">Play</span>
         </NavLink>
         
         <NavLink 
-          to="/referral" 
-          className={({ isActive }) => `flex flex-col items-center gap-1 transition-all ${isActive ? 'text-[#f27d26] scale-110' : 'text-white/40'}`}
+          to="/deposit" 
+          className={({ isActive }) => `flex flex-col items-center gap-1 transition-all ${isActive ? 'text-green-500 scale-110' : 'text-white/40'}`}
         >
-          <Users className="w-5 h-5 flex-shrink-0" />
-          <span className="text-[9px] font-bold uppercase tracking-tighter">Referral</span>
-        </NavLink>
-
-        <NavLink 
-          to="/transactions" 
-          className={({ isActive }) => `flex flex-col items-center gap-1 transition-all ${isActive ? 'text-[#f27d26] scale-110' : 'text-white/40'}`}
-        >
-          <History className="w-5 h-5 flex-shrink-0" />
-          <span className="text-[9px] font-bold uppercase tracking-tighter">Logs</span>
+          <Wallet className="w-5 h-5 flex-shrink-0" />
+          <span className="text-[9px] font-bold uppercase tracking-tighter">Deposit</span>
         </NavLink>
         
         <NavLink 
