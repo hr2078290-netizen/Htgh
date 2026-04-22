@@ -9,6 +9,7 @@ import fs from "fs";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import Razorpay from "razorpay";
+import cors from "cors";
 
 // Lazy initialize Razorpay
 let razorpayInstance: Razorpay | null = null;
@@ -95,6 +96,7 @@ async function startServer() {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+  app.use(cors());
 
   // Request logger helper
   app.use((req, res, next) => {
@@ -388,7 +390,7 @@ async function startServer() {
     return entry;
   };
 
-  // Sync Ledger to Firestore every 10 seconds (Reduced from 60s for better responsiveness on refresh)
+  // Sync Ledger to Firestore every 2 seconds (Reduced further for near-instant updates)
   setInterval(async () => {
     // 1. Sync User Balances/Bets
     const dirtyUsers = Array.from(userLedger.entries()).filter(([_, data]) => data.dirty);
@@ -413,7 +415,7 @@ async function startServer() {
         }
       }
     }
-  }, 10000);
+  }, 2000);
 
   // My Bets API (Optimized to return from ledger)
   app.get("/api/game/my-history", async (req, res) => {

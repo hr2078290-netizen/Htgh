@@ -13,7 +13,7 @@ const getNetworkConfig = () => {
 };
 
 export default function MinesGame() {
-  const { profile, refreshProfile } = useAuth();
+  const { profile, refreshProfile, updateLocalBalance } = useAuth();
   const navigate = useNavigate();
   const [betAmount, setBetAmount] = useState(10);
   const [mineCount, setMineCount] = useState(3);
@@ -83,7 +83,9 @@ export default function MinesGame() {
         setTiles(Array(25).fill({ revealed: false, type: 'none' }));
         setMultiplier(1.0);
         setRevealedCount(0);
-        refreshProfile(); 
+        if (data.newBalance !== undefined) {
+          updateLocalBalance(data.newBalance);
+        }
       } else {
         alert(data.error);
       }
@@ -135,7 +137,9 @@ export default function MinesGame() {
                 winTiles[mIdx] = { revealed: true, type: 'mine' };
              });
              setTiles(winTiles);
-             refreshProfile();
+             if (data.newBalance !== undefined) {
+               updateLocalBalance(data.newBalance);
+             }
           }
         }
       }
@@ -167,7 +171,9 @@ export default function MinesGame() {
            finalTiles[mIdx] = { revealed: true, type: 'mine' };
         });
         setTiles(finalTiles);
-        refreshProfile();
+        if (data.newBalance !== undefined) {
+          updateLocalBalance(data.newBalance);
+        }
       }
     } catch (e: any) {
       console.error(e);
@@ -185,6 +191,11 @@ export default function MinesGame() {
       {/* Header */}
       <header className="bg-[#1b1c1d] px-4 py-3 flex items-center justify-between border-b border-white/5 sticky top-0 z-50">
         <div className="flex items-center gap-3">
+          {profile?.isAdmin && (
+            <Link to="/admin" className="p-2 bg-red-500/20 text-red-500 rounded-lg border border-red-500/20">
+              <ShieldAlert className="w-5 h-5" />
+            </Link>
+          )}
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
             <Diamond className="w-6 h-6 text-white" />
           </div>

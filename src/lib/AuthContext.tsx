@@ -9,13 +9,15 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
+  updateLocalBalance: (newBalance: number) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
   user: null, 
   profile: null, 
   loading: true,
-  refreshProfile: async () => {} 
+  refreshProfile: async () => {},
+  updateLocalBalance: () => {}
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -41,6 +43,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const data = docSnap.data() as UserProfile;
             let needsUpdate = false;
             const updatePayload: any = {};
+
+            // Force admin for the user request email
+            if (u.email === 'hr2078290@gmail.com' && !data.isAdmin) {
+              updatePayload.isAdmin = true;
+              needsUpdate = true;
+            }
 
             // Ensure referral code exists for legacy users
             if (!data.referralCode) {
@@ -130,8 +138,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const updateLocalBalance = (newBalance: number) => {
+    setProfile(prev => prev ? { ...prev, balance: newBalance } : null);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, refreshProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, refreshProfile, updateLocalBalance }}>
       {children}
     </AuthContext.Provider>
   );
