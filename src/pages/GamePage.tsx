@@ -8,7 +8,7 @@ import HistoryModal from '../components/HistoryModal';
 
 const getNetworkConfig = () => {
   return {
-    apiBase: '/api'
+    apiBase: `${window.location.origin}/api`
   };
 };
 

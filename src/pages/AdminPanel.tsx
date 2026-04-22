@@ -10,9 +10,9 @@ const getNetworkConfig = () => {
   const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
   
   return {
-    apiBase: '/api',
+    apiBase: `${window.location.origin}/api`,
     wsUrl: `${wsProtocol}//${window.location.host}/api/game/ws`,
-    streamUrl: '/api/game/stream'
+    streamUrl: `${window.location.origin}/api/game/stream`
   };
 };
 
