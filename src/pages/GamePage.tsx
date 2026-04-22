@@ -7,10 +7,8 @@ import { useAuth } from '../lib/AuthContext';
 import HistoryModal from '../components/HistoryModal';
 
 const getNetworkConfig = () => {
-  const domain = window.location.host;
-  const protocol = window.location.protocol;
   return {
-    apiBase: `${protocol}//${domain}/api`
+    apiBase: '/api'
   };
 };
 

@@ -10,10 +10,8 @@ interface HistoryModalProps {
 }
 
 const getNetworkConfig = () => {
-  const protocol = window.location.protocol;
-  const domain = window.location.host;
   return {
-    apiBase: `${protocol}//${domain}/api`
+    apiBase: '/api'
   };
 };
 

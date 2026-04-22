@@ -6,14 +6,13 @@ import { GameSettings, DepositRequest, WithdrawalRequest, UserProfile, GameHisto
 import { useAuth } from '../lib/AuthContext';
 
 const getNetworkConfig = () => {
-  const domain = window.location.host;
   const protocol = window.location.protocol;
   const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
   
   return {
-    apiBase: `${protocol}//${domain}/api`,
-    wsUrl: `${wsProtocol}//${domain}/api/game/ws`,
-    streamUrl: `${protocol}//${domain}/api/game/stream`
+    apiBase: '/api',
+    wsUrl: `${wsProtocol}//${window.location.host}/api/game/ws`,
+    streamUrl: '/api/game/stream'
   };
 };
 
